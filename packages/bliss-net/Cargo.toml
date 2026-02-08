@@ -1,0 +1,32 @@
+[package]
+name = "bliss-net"
+description = "Bliss networking"
+documentation = "https://docs.rs/bliss-net"
+version = "0.2.99"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+http2 = ["reqwest/http2"]
+cookies = ["reqwest/cookies"]
+multipart = ["reqwest/multipart", "reqwest/stream"]
+cache = ["dep:reqwest-middleware", "dep:http-cache-reqwest", "dep:directories"]
+debug_log = []
+
+[dependencies]
+# Bliss dependencies
+bliss-traits = { workspace = true }
+
+# Networking dependencies
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["charset", "rustls-tls"] }
+data-url = { workspace = true }
+
+# Caching
+reqwest-middleware = { workspace = true, optional = true }
+http-cache-reqwest = { workspace = true, optional = true, features = ["manager-cacache"] }
+directories = { version = "6.0.0", optional = true }

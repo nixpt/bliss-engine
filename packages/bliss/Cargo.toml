@@ -1,0 +1,35 @@
+[package]
+name = "bliss"
+description = "High-level APIs for rendering HTML with Bliss"
+documentation = "https://docs.rs/bliss"
+version = "0.2.99"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["net", "accessibility"]
+net = ["dep:tokio", "dep:url", "dep:bliss-net"]
+accessibility = ["bliss-shell/accessibility"]
+tracing = ["bliss-shell/tracing"]
+
+[dependencies]
+# Bliss dependencies
+anyrender_vello = { workspace = true }
+bliss-traits = { workspace = true }
+bliss-dom = { workspace = true }
+bliss-html = { workspace = true }
+bliss-shell = { workspace = true }
+bliss-paint = { workspace = true }
+bliss-net = { workspace = true, optional = true }
+
+# IO & Networking
+url = { workspace = true, features = ["serde"], optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

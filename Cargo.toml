@@ -2,19 +2,14 @@
 members = [
   "packages/accesskit_xplat",
   "packages/debug_timer",
-  "packages/blitz-traits",
-  "packages/blitz-dom",
-  "packages/blitz-html",
-  "packages/blitz-net",
-  "packages/blitz-paint",
-  "packages/blitz-shell",
-  "packages/blitz",
+  "packages/bliss-traits",
+  "packages/bliss-dom",
+  "packages/bliss-html",
+  "packages/bliss-net",
+  "packages/bliss-paint",
+  "packages/bliss-shell",
+  "packages/bliss",
   "packages/stylo_taffy",
-
-  "apps/browser",
-  "apps/readme",
-  "apps/bump",
-  "wpt/runner",
 ]
 exclude = ["sites"]
 resolver = "2"
@@ -22,21 +17,21 @@ resolver = "2"
 [workspace.package]
 version = "0.2.99"
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/dioxuslabs/blitz"
-repository = "https://github.com/dioxuslabs/blitz"
+homepage = "https://github.com/nixpt/bliss-engine"
+repository = "https://github.com/nixpt/bliss-engine"
 categories = ["gui"]
 edition = "2024"
 rust-version = "1.90.0"
 
 [workspace.dependencies]
-# Blitz dependencies(in-repo)
-blitz = { version = "0.2.0", path = "./packages/blitz" }
-blitz-dom = { version = "0.2.0", path = "./packages/blitz-dom", default-features = false }
-blitz-html = { version = "0.2.0", path = "./packages/blitz-html", default-features = false }
-blitz-net = { version = "0.2.0", path = "./packages/blitz-net", default-features = false }
-blitz-paint = { version = "0.2.0", path = "./packages/blitz-paint", default-features = false }
-blitz-shell = { version = "0.2.0", path = "./packages/blitz-shell", default-features = false }
-blitz-traits = { version = "0.2.0", path = "./packages/blitz-traits", default-features = false }
+# Bliss dependencies(in-repo)
+bliss = { version = "0.2.0", path = "./packages/bliss" }
+bliss-dom = { version = "0.2.0", path = "./packages/bliss-dom", default-features = false }
+bliss-html = { version = "0.2.0", path = "./packages/bliss-html", default-features = false }
+bliss-net = { version = "0.2.0", path = "./packages/bliss-net", default-features = false }
+bliss-paint = { version = "0.2.0", path = "./packages/bliss-paint", default-features = false }
+bliss-shell = { version = "0.2.0", path = "./packages/bliss-shell", default-features = false }
+bliss-traits = { version = "0.2.0", path = "./packages/bliss-traits", default-features = false }
 stylo_taffy = { version = "0.2.0", path = "./packages/stylo_taffy", default-features = false }
 debug_timer = { version = "0.1.2", path = "./packages/debug_timer" }
 accesskit_xplat = { version = "0.1", path = "./packages/accesskit_xplat", default-features = false }
@@ -184,11 +179,11 @@ opt-level = "z"
 # This is a "virtual package"
 # It is not meant to be published, but is used so "cargo run --example XYZ" works properly
 [package]
-name = "blitz-examples"
+name = "bliss-examples"
 version = "0.0.1"
 authors = ["Jonathan Kelley"]
 edition = "2024"
-description = "Top level crate for Blitz"
+description = "Top level crate for Bliss"
 license = "MIT OR Apache-2.0"
 keywords = ["dom", "ui", "gui", "react", "wasm"]
 rust-version = "1.89.0"
@@ -199,19 +194,20 @@ anyrender = { workspace = true }
 anyrender_vello = { workspace = true }
 anyrender_vello_cpu = { workspace = true, features = ["multithreading"] }
 anyrender_vello_hybrid = { workspace = true }
-blitz-dom = { workspace = true, features = ["default"] }
-blitz-html = { workspace = true }
-blitz-traits = { workspace = true }
-blitz-paint = { workspace = true }
-blitz-shell = { workspace = true }
-blitz-net = { workspace = true }
-blitz = { workspace = true, features = ["net"] }
+bliss-dom = { workspace = true, features = ["default"] }
+bliss-html = { workspace = true }
+bliss-traits = { workspace = true }
+bliss-paint = { workspace = true }
+bliss-shell = { workspace = true }
+bliss-net = { workspace = true }
+bliss = { workspace = true, features = ["net"] }
 euclid = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 image = { workspace = true }
 png = { workspace = true }
 peniko = { workspace = true }
+boa_engine = "0.20.0"
 env_logger = "0.11"
 tracing-subscriber = "0.3"
 
