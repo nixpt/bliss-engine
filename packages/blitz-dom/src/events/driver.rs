@@ -1,6 +1,7 @@
 use crate::Document;
 use blitz_traits::events::{
-    BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData, EventState, UiEvent,
+    BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData, EventPhase, EventSink, EventState,
+    UiEvent,
 };
 use std::collections::VecDeque;
 
@@ -31,6 +32,7 @@ pub struct EventDriver<'doc, Handler: EventHandler> {
     doc: &'doc mut dyn Document,
     handler: Handler,
     queue: VecDeque<DomEvent>,
+    event_sink: Option<&'doc dyn EventSink>,
 }
 
 impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
@@ -39,6 +41,20 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             doc,
             handler,
             queue: VecDeque::with_capacity(4),
+            event_sink: None,
+        }
+    }
+
+    pub fn with_event_sink(
+        doc: &'doc mut dyn Document,
+        handler: Handler,
+        event_sink: &'doc dyn EventSink,
+    ) -> Self {
+        EventDriver {
+            doc,
+            handler,
+            queue: VecDeque::with_capacity(4),
+            event_sink: Some(event_sink),
         }
     }
 
@@ -277,8 +293,24 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         };
 
         let mut event_state = initial_event_state;
-        self.handler
-            .handle_event(&chain, event, self.doc, &mut event_state);
+
+        for node_id in &chain {
+            self.handler.handle_event(
+                std::slice::from_ref(node_id),
+                event,
+                self.doc,
+                &mut event_state,
+            );
+
+            if event_state.propagation_is_stopped() {
+                break;
+            }
+        }
+
+        if let Some(sink) = &self.event_sink {
+            let doc_id = self.doc.id();
+            sink.on_dom_event(doc_id, event, EventPhase::Target, event.target);
+        }
 
         event_state
     }

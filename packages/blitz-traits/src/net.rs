@@ -3,12 +3,13 @@
 pub use bytes::Bytes;
 pub use http::{self, HeaderMap, Method};
 use serde::{
-    Serialize,
     ser::{SerializeSeq, SerializeTuple},
+    Serialize,
 };
+use std::collections::HashMap;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::{ops::Deref, path::PathBuf};
 pub use url::Url;
@@ -24,6 +25,9 @@ pub trait NetProvider: Send + Sync + 'static {
 /// the NetCallack with the result.
 pub trait NetHandler: Send + Sync + 'static {
     fn bytes(self: Box<Self>, resolved_url: String, bytes: Bytes);
+    fn chunk(&self, _seq: u64, _bytes: Bytes) {}
+    fn end(&self) {}
+    fn error(&self, _message: String) {}
 }
 
 /// A callback which gets called every time a network request completes
@@ -48,6 +52,7 @@ pub struct Request {
     pub headers: HeaderMap,
     pub body: Body,
     pub signal: Option<AbortSignal>,
+    pub metadata: HashMap<String, String>,
 }
 impl Request {
     /// A get request to the specified Url and an empty body
@@ -59,6 +64,7 @@ impl Request {
             headers: HeaderMap::new(),
             body: Body::Empty,
             signal: None,
+            metadata: HashMap::new(),
         }
     }
 
@@ -158,6 +164,17 @@ impl From<PathBuf> for EntryValue {
 pub struct DummyNetProvider;
 impl NetProvider for DummyNetProvider {
     fn fetch(&self, _doc_id: usize, _request: Request, _handler: Box<dyn NetHandler>) {}
+}
+
+pub trait NetPolicy: Send + Sync + 'static {
+    fn allow_fetch(&self, doc_id: usize, url: &Url) -> Result<(), String>;
+}
+
+pub struct DefaultNetPolicy;
+impl NetPolicy for DefaultNetPolicy {
+    fn allow_fetch(&self, _doc_id: usize, _url: &Url) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// The AbortController interface represents a controller object that

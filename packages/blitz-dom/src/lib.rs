@@ -54,6 +54,8 @@ mod mutator;
 mod query_selector;
 mod resolve;
 mod selection;
+/// Script engine abstraction
+mod script;
 /// Implementations that interact with servo's style engine
 mod stylo;
 mod stylo_to_cursor_icon;
@@ -76,6 +78,10 @@ pub use markup5ever::{
 pub use mutator::DocumentMutator;
 pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
+pub use script::{
+    BoxedScriptEngine, EventHandled, ExecutionContext, NoopScriptEngine, ScriptEngine, ScriptError,
+    ScriptErrorCallback, ScriptLanguage, ScriptValue,
+};
 pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;

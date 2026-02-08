@@ -63,6 +63,7 @@ impl NavigationOptions {
             headers: HeaderMap::new(),
             body: self.document_resource,
             signal: None,
+            metadata: std::collections::HashMap::new(),
         }
     }
 }

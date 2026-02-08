@@ -1,4 +1,4 @@
-use crate::events::{DragMode, ScrollAnimationState, handle_dom_event};
+use crate::events::{handle_dom_event, DragMode, ScrollAnimationState};
 use crate::font_metrics::BlitzFontMetricsProvider;
 use crate::layout::construct::ConstructionTask;
 use crate::layout::damage::ALL_DAMAGE;
@@ -13,11 +13,11 @@ use crate::traversal::TreeTraverser;
 use crate::url::DocumentUrl;
 use crate::util::ImageType;
 use crate::{
-    DEFAULT_CSS, DocumentConfig, DocumentMutator, DummyHtmlParserProvider, ElementData,
-    EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, TextNodeData,
+    DocumentConfig, DocumentMutator, DummyHtmlParserProvider, ElementData, EventDriver,
+    HtmlParserProvider, Node, NodeData, NoopEventHandler, TextNodeData, DEFAULT_CSS,
 };
 use blitz_traits::devtools::DevtoolSettings;
-use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData, HitResult, UiEvent};
+use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData, EventSink, HitResult, UiEvent};
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
 use blitz_traits::net::{DummyNetProvider, NetProvider, Request};
 use blitz_traits::shell::{ColorScheme, DummyShellProvider, ShellProvider, Viewport};
@@ -25,7 +25,7 @@ use cursor_icon::CursorIcon;
 use linebender_resource_handle::Blob;
 use markup5ever::local_name;
 use parley::{FontContext, PlainEditorDriver};
-use selectors::{Element, matching::QuirksMode};
+use selectors::{matching::QuirksMode, Element};
 use slab::Slab;
 use std::any::Any;
 use std::cell::RefCell;
@@ -34,22 +34,22 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 use std::task::Context as TaskContext;
 use std::time::Instant;
-use style::Atom;
 use style::animation::DocumentAnimationSet;
 use style::attr::{AttrIdentifier, AttrValue};
 use style::data::{ElementData as StyloElementData, ElementStyles};
 use style::media_queries::MediaType;
-use style::properties::ComputedValues;
 use style::properties::style_structs::Font;
+use style::properties::ComputedValues;
 use style::queries::values::PrefersColorScheme;
 use style::selector_parser::ServoElementSnapshot;
 use style::servo_arc::Arc as ServoArc;
-use style::values::GenericAtomIdent;
 use style::values::computed::Overflow;
+use style::values::GenericAtomIdent;
+use style::Atom;
 use style::{
     dom::{TDocument, TNode},
     media_queries::{Device, MediaList},
@@ -124,8 +124,18 @@ pub trait Document: Any + 'static {
     /// Update the [`Document`] in response to a [`UiEvent`] (click, keypress, etc)
     fn handle_ui_event(&mut self, event: UiEvent) {
         let mut doc = self.inner_mut();
-        let mut driver = EventDriver::new(&mut *doc, NoopEventHandler);
-        driver.handle_ui_event(event);
+        let sink = doc.event_sink.clone();
+        match &sink {
+            Some(s) => {
+                let mut driver =
+                    EventDriver::with_event_sink(&mut *doc, NoopEventHandler, s.as_ref());
+                driver.handle_ui_event(event);
+            }
+            None => {
+                let mut driver = EventDriver::new(&mut *doc, NoopEventHandler);
+                driver.handle_ui_event(event);
+            }
+        }
     }
 
     /// Poll any pending async operations, and flush changes to the underlying [`BaseDocument`]
@@ -284,6 +294,12 @@ pub struct BaseDocument {
     pub shell_provider: Arc<dyn ShellProvider>,
     /// HTML parser provider. Used to parse HTML for setInnerHTML
     pub html_parser_provider: Arc<dyn HtmlParserProvider>,
+
+    /// Script engine for executing JavaScript, Lua, Python, etc.
+    pub(crate) script_engine: Option<crate::script::BoxedScriptEngine>,
+
+    /// Event sink for external event observation
+    pub(crate) event_sink: Option<Arc<dyn EventSink>>,
 }
 
 pub(crate) fn make_device(viewport: &Viewport, font_ctx: Arc<Mutex<FontContext>>) -> Device {
@@ -411,6 +427,8 @@ impl BaseDocument {
             navigation_provider,
             shell_provider,
             html_parser_provider,
+            script_engine: None,
+            event_sink: None,
             last_mousedown_time: None,
             mousedown_position: taffy::Point::ZERO,
             click_count: 0,
@@ -466,6 +484,62 @@ impl BaseDocument {
     /// Set the Document's html parser provider
     pub fn set_html_parser_provider(&mut self, html_parser_provider: Arc<dyn HtmlParserProvider>) {
         self.html_parser_provider = html_parser_provider;
+    }
+
+    /// Set the script engine for this document
+    pub fn set_script_engine(&mut self, mut engine: crate::script::BoxedScriptEngine) {
+        engine.init(self);
+        self.script_engine = Some(engine);
+    }
+
+    /// Set the event sink for this document
+    pub fn set_event_sink(&mut self, sink: Arc<dyn EventSink>) {
+        self.event_sink = Some(sink);
+    }
+
+    /// Execute script code
+    pub fn execute_script(
+        &mut self,
+        code: &str,
+        language: crate::script::ScriptLanguage,
+        context: &crate::script::ExecutionContext,
+    ) -> Result<crate::script::ScriptValue, crate::script::ScriptError> {
+        if let Some(engine) = &mut self.script_engine {
+            engine.execute(code, language, context)
+        } else {
+            Err(crate::script::ScriptError::UnsupportedLanguage(format!(
+                "{:?}",
+                language
+            )))
+        }
+    }
+
+    /// Poll script engine for async work
+    pub fn poll_script_engine(&mut self) -> Result<bool, crate::script::ScriptError> {
+        if let Some(engine) = &mut self.script_engine {
+            engine.tick()
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Set error handler for script engine
+    pub fn set_script_error_handler(
+        &mut self,
+        callback: Option<crate::script::ScriptErrorCallback>,
+    ) {
+        if let Some(engine) = &mut self.script_engine {
+            engine.set_error_handler(callback);
+        }
+    }
+
+    /// Handle UI event with script engine support
+    pub fn handle_ui_event_with_script(&mut self, event: &DomEvent) -> crate::script::EventHandled {
+        if let Some(engine) = &mut self.script_engine {
+            engine.handle_event(event)
+        } else {
+            crate::script::EventHandled::Propagate
+        }
     }
 
     /// Set base url for resolving linked resources (stylesheets, images, fonts, etc)

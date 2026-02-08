@@ -2,6 +2,7 @@
 //! circular or unnecessary dependencies.
 
 pub mod devtools;
+pub mod dom_control;
 pub mod events;
 pub mod navigation;
 pub mod net;

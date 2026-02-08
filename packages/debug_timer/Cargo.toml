@@ -6,7 +6,7 @@ homepage = "https://github.com/dioxuslabs/blitz"
 repository = "https://github.com/dioxuslabs/blitz"
 documentation = "https://docs.rs/debug_timer"
 license.workspace = true
-edition = "2021"
+edition = "2024"
 
 [features]
 enable = []
