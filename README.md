@@ -64,6 +64,12 @@ make build
   <i>Google rendered in a Bliss-based browser</i>
 </p>
 
+<p align="center">
+  <img src="assets/react.png" width="400" alt="Bliss React Screenshot">
+  <br>
+  <i>A Polyglot React component rendered via Boa Engine</i>
+</p>
+
 ## 🏗️ Architecture: The Bliss Stack
 
 Bliss is comprised of granular, modular crates that can be combined or replaced:
