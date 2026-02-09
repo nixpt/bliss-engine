@@ -18,8 +18,8 @@ env:
 jobs:
 
   # MSRV check.
-  # Blitz only guarantees "latest stable". However we have this check here to ensure that we advertise
-  # our MSRV. We also make an effort not to increase MSRV in patch versions of Blitz.
+  # Bliss only guarantees "latest stable". However we have this check here to ensure that we advertise
+  # our MSRV. We also make an effort not to increase MSRV in patch versions of Bliss.
   #
   # We only run `cargo build` (not `cargo test`) so as to avoid requiring dev-dependencies to build with the MSRV
   # version. Building is likely sufficient as runtime errors varying between rust versions is very unlikely.
@@ -192,7 +192,7 @@ jobs:
         if: ${{ matrix.platform.cross == true }}
         run: cargo install cross --git https://github.com/cross-rs/cross --rev 426e811
 
-      # This is currently disabled as Blitz's CI doesn't need the extra disk space.
+      # This is currently disabled as Bliss's CI doesn't need the extra disk space.
       # So this task is just taking up time for no reason. We will reinstate if our
       # disk space requirement increase.
       #
