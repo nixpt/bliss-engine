@@ -230,7 +230,30 @@ impl<Rend: WindowRenderer> View<Rend> {
     pub fn poll(&mut self) -> bool {
         if let Some(waker) = &self.waker {
             let cx = std::task::Context::from_waker(waker);
+            let mut needs_redraw = false;
+
+            // Poll the document
             if self.doc.poll(Some(cx)) {
+                needs_redraw = true;
+            }
+
+            // Poll the script engine
+            let mut inner = self.doc.inner_mut();
+            match inner.poll_script_engine() {
+                Ok(true) => {
+                    // More work pending, schedule another poll
+                    waker.wake_by_ref();
+                    needs_redraw = true;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    // Report error
+                    eprintln!("Script engine error: {:?}", e);
+                }
+            }
+            drop(inner);
+
+            if needs_redraw {
                 #[cfg(feature = "accessibility")]
                 {
                     let inner = self.doc.inner();

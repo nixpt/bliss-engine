@@ -124,8 +124,20 @@ pub trait Document: Any + 'static {
     /// Update the [`Document`] in response to a [`UiEvent`] (click, keypress, etc)
     fn handle_ui_event(&mut self, event: UiEvent) {
         let mut doc = self.inner_mut();
-        let mut driver = EventDriver::new(&mut *doc, NoopEventHandler);
-        driver.handle_ui_event(event);
+        let sink = doc.event_sink.clone();
+        // Only forward events to sink if events are enabled (lifecycle check)
+        // This prevents "Loading" or "Suspended" capsules from receiving events
+        match &sink {
+            Some(s) if doc.events_enabled => {
+                let mut driver =
+                    EventDriver::with_event_sink(&mut *doc, NoopEventHandler, s.as_ref());
+                driver.handle_ui_event(event);
+            }
+            _ => {
+                let mut driver = EventDriver::new(&mut *doc, NoopEventHandler);
+                driver.handle_ui_event(event);
+            }
+        }
     }
 
     /// Poll any pending async operations, and flush changes to the underlying [`BaseDocument`]
@@ -284,6 +296,16 @@ pub struct BaseDocument {
     pub shell_provider: Arc<dyn ShellProvider>,
     /// HTML parser provider. Used to parse HTML for setInnerHTML
     pub html_parser_provider: Arc<dyn HtmlParserProvider>,
+
+    /// Script engine for executing JavaScript, Lua, Python, etc.
+    pub(crate) script_engine: Option<crate::script::BoxedScriptEngine>,
+
+    /// Event sink for external event observation
+    pub(crate) event_sink: Option<Arc<dyn blitz_traits::events::EventSink>>,
+
+    /// Whether events should be forwarded to the event sink
+    /// Used for lifecycle management - only "Running" capsules should receive events
+    pub(crate) events_enabled: bool,
 }
 
 pub(crate) fn make_device(viewport: &Viewport, font_ctx: Arc<Mutex<FontContext>>) -> Device {
@@ -411,6 +433,9 @@ impl BaseDocument {
             navigation_provider,
             shell_provider,
             html_parser_provider,
+            script_engine: None,
+            event_sink: None,
+            events_enabled: false,
             last_mousedown_time: None,
             mousedown_position: taffy::Point::ZERO,
             click_count: 0,
@@ -466,6 +491,71 @@ impl BaseDocument {
     /// Set the Document's html parser provider
     pub fn set_html_parser_provider(&mut self, html_parser_provider: Arc<dyn HtmlParserProvider>) {
         self.html_parser_provider = html_parser_provider;
+    }
+
+    /// Set the script engine for this document
+    pub fn set_script_engine(&mut self, mut engine: crate::script::BoxedScriptEngine) {
+        engine.init(self);
+        self.script_engine = Some(engine);
+    }
+
+    /// Set the event sink for this document
+    pub fn set_event_sink(&mut self, sink: Arc<dyn blitz_traits::events::EventSink>) {
+        self.event_sink = Some(sink);
+    }
+
+    /// Enable or disable event forwarding to the event sink
+    /// This is used for lifecycle management - events should only be forwarded when the capsule is "Running"
+    pub fn set_events_enabled(&mut self, enabled: bool) {
+        self.events_enabled = enabled;
+    }
+
+    /// Execute script code
+    pub fn execute_script(
+        &mut self,
+        code: &str,
+        language: crate::script::ScriptLanguage,
+        context: &crate::script::ExecutionContext,
+    ) -> Result<crate::script::ScriptValue, crate::script::ScriptError> {
+        if let Some(engine) = &mut self.script_engine {
+            engine.execute(code, language, context)
+        } else {
+            Err(crate::script::ScriptError::UnsupportedLanguage(format!(
+                "{:?}",
+                language
+            )))
+        }
+    }
+
+    /// Poll script engine for async work
+    pub fn poll_script_engine(&mut self) -> Result<bool, crate::script::ScriptError> {
+        if let Some(engine) = &mut self.script_engine {
+            engine.tick()
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Set error handler for script engine
+    pub fn set_script_error_handler(
+        &mut self,
+        callback: Option<crate::script::ScriptErrorCallback>,
+    ) {
+        if let Some(engine) = &mut self.script_engine {
+            engine.set_error_handler(callback);
+        }
+    }
+
+    /// Handle UI event with script engine support
+    pub fn handle_ui_event_with_script(
+        &mut self,
+        event: &blitz_traits::events::DomEvent,
+    ) -> crate::script::EventHandled {
+        if let Some(engine) = &mut self.script_engine {
+            engine.handle_event(event)
+        } else {
+            crate::script::EventHandled::Propagate
+        }
     }
 
     /// Set base url for resolving linked resources (stylesheets, images, fonts, etc)

@@ -46,7 +46,7 @@ mod config;
 mod debug;
 mod events;
 mod font_metrics;
-mod form;
+pub mod form;
 mod html;
 /// Integration of taffy and the DOM.
 mod layout;
@@ -60,6 +60,7 @@ mod stylo_to_cursor_icon;
 mod stylo_to_parley;
 mod traversal;
 mod url;
+pub mod script;
 
 pub mod net;
 pub mod util;
@@ -82,3 +83,5 @@ pub type SelectorList = selectors::SelectorList<style::selector_parser::Selector
 pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
 pub use util::Point;
+pub use script::{ScriptEngine, ScriptLanguage, ScriptValue, ScriptError, ExecutionContext};
+pub use form::{RequestContentType};

@@ -681,3 +681,32 @@ pub enum BlitzImeEvent {
     /// pending preedit text.
     Disabled,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventPhase {
+    Capture,
+    Target,
+    Bubble,
+}
+
+pub trait EventSink: Send + Sync {
+    fn on_dom_event(
+        &self,
+        doc_id: usize,
+        event: &DomEvent,
+        phase: EventPhase,
+        current_target: usize,
+    );
+}
+
+pub struct NoopEventSink;
+impl EventSink for NoopEventSink {
+    fn on_dom_event(
+        &self,
+        _doc_id: usize,
+        _event: &DomEvent,
+        _phase: EventPhase,
+        _current_target: usize,
+    ) {
+    }
+}

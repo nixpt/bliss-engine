@@ -1,0 +1,29 @@
+[package]
+name = "blitz-mustang"
+version = "0.1.0"
+authors = ["The Exosphere Authors"]
+edition = "2021"
+description = "Blitz Mustang: GPU-Accelerated Effect Compositor for the Blitz DOM"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dioxuslabs/blitz"
+homepage = "https://github.com/dioxuslabs/blitz"
+
+[dependencies]
+# Core dependencies
+serde = { workspace = true, features = ["derive"] }
+anyhow = "1.0"
+
+# GPU/Rendering
+wgpu = { workspace = true, optional = true }
+vello = { workspace = true, optional = true }
+kurbo = { workspace = true }
+peniko = { workspace = true }
+
+# Internal dependencies
+blitz-traits = { workspace = true }
+anyrender = { workspace = true, optional = true }
+anyrender_vello = { workspace = true, optional = true }
+
+[features]
+default = ["wgpu", "vello", "anyrender", "anyrender_vello"]
+gpu = ["wgpu", "vello", "anyrender", "anyrender_vello"]
