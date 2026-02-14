@@ -1,5 +1,5 @@
 use markup5ever::local_name;
-use parley::FontStack;
+use parley::FontFamily;
 use style::computed_values::list_style_position::T as ListStylePosition;
 use style::computed_values::list_style_type::T as ListStyleType;
 
@@ -68,15 +68,15 @@ fn node_list_item_child(
     let styles = node.primary_styles().unwrap();
     let list_style_type = styles.clone_list_style_type();
     let list_style_position = styles.clone_list_style_position();
-    let marker = marker_for_style(list_style_type, index)?;
+    let marker = marker_for_style(list_style_type.clone(), index)?;
 
     let position = match list_style_position {
         ListStylePosition::Inside => ListItemLayoutPosition::Inside,
         ListStylePosition::Outside => {
             let mut parley_style = stylo_to_parley::style(child_id, &styles);
 
-            if let Some(font_stack) = font_for_bullet_style(list_style_type) {
-                parley_style.font_stack = font_stack;
+            if let Some(font_family) = font_for_bullet_style(list_style_type) {
+                parley_style.font_family = font_family;
             }
 
             // Create a parley tree builder
@@ -135,7 +135,7 @@ fn marker_for_style(list_style_type: ListStyleType, index: usize) -> Option<Mark
 }
 
 // Override the font to our specific bullet font when rendering bullets
-fn font_for_bullet_style(list_style_type: ListStyleType) -> Option<FontStack<'static>> {
+fn font_for_bullet_style(list_style_type: ListStyleType) -> Option<FontFamily<'static>> {
     let bullet_font = Some("Bullet, monospace, sans-serif".into());
     match list_style_type {
         ListStyleType::Disc

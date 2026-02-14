@@ -263,6 +263,7 @@ impl DocumentMutator<'_> {
 
         if *attr == local_name!("style") {
             element.flush_style_attribute(&self.doc.guard, &self.doc.url.url_extra_data());
+            node.mark_style_attr_updated();
             return;
         }
 
@@ -339,6 +340,7 @@ impl DocumentMutator<'_> {
 
         if *attr == local_name!("style") {
             element.flush_style_attribute(&self.doc.guard, &self.doc.url.url_extra_data());
+            node.mark_style_attr_updated();
         } else if (tag, attr) == tag_and_attr!("canvas", "src") {
             self.recompute_is_animating = true;
         } else if (tag, attr) == tag_and_attr!("link", "href") {
@@ -633,6 +635,27 @@ impl<'doc> DocumentMutator<'doc> {
         self.doc.iter_subtree_mut(node_id, |node_id, doc| {
             let node = &mut doc.nodes[node_id];
             node.flags.set(NodeFlags::IS_IN_DOCUMENT, false);
+
+            // Clear hover state if this node was being hovered.
+            // This prevents stale hover_node_id references.
+            if doc.hover_node_id == Some(node_id) {
+                doc.hover_node_id = None;
+                doc.hover_node_is_text = false;
+            }
+
+            // Clear active state if this node was active
+            // This prevents stale active_node_id references.
+            if doc.active_node_id == Some(node_id) {
+                doc.active_node_id = None;
+            }
+
+            // Remove any snapshot for this node to prevent stale snapshot references
+            // during style invalidation.
+            if node.has_snapshot {
+                let opaque_id = style::dom::TNode::opaque(&&*node);
+                doc.snapshots.remove(&opaque_id);
+                node.has_snapshot = false;
+            }
 
             // If the node has an "id" attribute remove it from the ID map.
             if let Some(id_attr) = node.attr(local_name!("id")) {

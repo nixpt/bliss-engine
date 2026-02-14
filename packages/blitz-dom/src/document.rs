@@ -337,26 +337,34 @@ impl BaseDocument {
 
         let font_ctx = config
             .font_ctx
-            // .map(|mut font_ctx| {
-            //     font_ctx.collection.make_shared();
-            //     font_ctx.source_cache.make_shared();
-            //     font_ctx
-            // })
+            .map(|mut font_ctx| {
+                font_ctx.source_cache.make_shared();
+                // font_ctx.collection.make_shared();
+                font_ctx
+            })
             .unwrap_or_else(|| {
-                // let mut font_ctx = FontContext {
-                //     source_cache: SourceCache::new_shared(),
-                //     collection: Collection::new(CollectionOptions {
-                //         shared: true,
-                //         system_fonts: true,
-                //     }),
-                // };
-                let mut font_ctx = FontContext::default();
+                use parley::fontique::{Collection, CollectionOptions, SourceCache};
+                let mut font_ctx = FontContext {
+                    source_cache: SourceCache::new_shared(),
+                    collection: Collection::new(CollectionOptions {
+                        shared: false,
+                        system_fonts: true,
+                    }),
+                };
                 font_ctx
                     .collection
                     .register_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
                 font_ctx
             });
         let font_ctx = Arc::new(Mutex::new(font_ctx));
+
+        // Make sure we turn on stylo features *before* creating the Stylist
+        style_config::set_bool("layout.flexbox.enabled", true);
+        style_config::set_bool("layout.grid.enabled", true);
+        style_config::set_bool("layout.legacy_layout", true);
+        style_config::set_bool("layout.unimplemented", true);
+        style_config::set_bool("layout.columns.enabled", true);
+        style_config::set_i32("layout.threads", -1);
 
         let viewport = config.viewport.unwrap_or_default();
         let device = make_device(&viewport, font_ctx.clone());
@@ -365,13 +373,6 @@ impl BaseDocument {
         let nodes = Box::new(Slab::new());
         let guard = SharedRwLock::new();
         let nodes_to_id = HashMap::new();
-
-        // Make sure we turn on stylo features
-        style_config::set_bool("layout.flexbox.enabled", true);
-        style_config::set_bool("layout.grid.enabled", true);
-        style_config::set_bool("layout.legacy_layout", true);
-        style_config::set_bool("layout.unimplemented", true);
-        style_config::set_bool("layout.columns.enabled", true);
 
         let base_url = config
             .base_url
@@ -668,17 +669,28 @@ impl BaseDocument {
     }
 
     pub fn set_style_property(&mut self, node_id: usize, name: &str, value: &str) {
-        self.nodes[node_id]
-            .element_data_mut()
-            .unwrap()
-            .set_style_property(name, value, &self.guard, self.url.url_extra_data());
+        let node = &mut self.nodes[node_id];
+        let did_change = node.element_data_mut().unwrap().set_style_property(
+            name,
+            value,
+            &self.guard,
+            self.url.url_extra_data(),
+        );
+        if did_change {
+            node.mark_style_attr_updated();
+        }
     }
 
     pub fn remove_style_property(&mut self, node_id: usize, name: &str) {
-        self.nodes[node_id]
-            .element_data_mut()
-            .unwrap()
-            .remove_style_property(name, &self.guard, self.url.url_extra_data());
+        let node = &mut self.nodes[node_id];
+        let did_change = node.element_data_mut().unwrap().remove_style_property(
+            name,
+            &self.guard,
+            self.url.url_extra_data(),
+        );
+        if did_change {
+            node.mark_style_attr_updated();
+        }
     }
 
     pub fn set_sub_document(&mut self, node_id: usize, sub_document: Box<dyn Document>) {

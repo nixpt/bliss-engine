@@ -104,7 +104,7 @@ pub struct Node {
     // This little bundle of joy is our style data from stylo and a lock guard that allows access to it
     // TODO: See if guard can be hoisted to a higher level
     pub stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
-    pub selector_flags: AtomicRefCell<ElementSelectorFlags>,
+    pub selector_flags: Cell<ElementSelectorFlags>,
     pub guard: SharedRwLock,
     pub element_state: ElementState,
 
@@ -167,7 +167,7 @@ impl Node {
             data,
 
             stylo_element_data: Default::default(),
-            selector_flags: AtomicRefCell::new(ElementSelectorFlags::empty()),
+            selector_flags: Cell::new(ElementSelectorFlags::empty()),
             guard,
             element_state: state,
 
@@ -276,6 +276,14 @@ impl Node {
     /// Clears the dirty_descendants flag on this node.
     pub fn unset_dirty_descendants(&self) {
         self.dirty_descendants.store(false, Ordering::Relaxed);
+    }
+
+    /// Set appropriate damage for Stylo when an element's style attribute is updated
+    pub(crate) fn mark_style_attr_updated(&mut self) {
+        if let Some(data) = &mut self.stylo_element_data.get_mut() {
+            data.hint |= RestyleHint::RESTYLE_STYLE_ATTRIBUTE;
+            self.set_dirty_descendants();
+        }
     }
 
     /// Marks all ancestors of this node as having dirty descendants.
