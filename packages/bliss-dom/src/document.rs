@@ -825,7 +825,11 @@ impl BaseDocument {
     }
 
     pub fn create_node(&mut self, node_data: NodeData) -> usize {
-        let slab_ptr = self.nodes.as_mut() as *mut Slab<Node>;
+        // Cast to `*const` since Node only needs shared access to the slab via
+        // `tree()`. Using `*const` instead of `*mut` eliminates the aliasing
+        // concern that would arise if `&mut Node` (from `&mut slab[id]`) and
+        // `tree()` were both live simultaneously under Stacked Borrows.
+        let slab_ptr = self.nodes.as_ref() as *const Slab<Node>;
         let guard = self.guard.clone();
 
         let entry = self.nodes.vacant_entry();

@@ -81,8 +81,19 @@ impl NodeFlags {
 }
 
 pub struct Node {
-    // The actual tree we belong to. This is unsafe!!
-    tree: *mut Slab<Node>,
+    /// Back-pointer to the slab that owns this node, used by [`tree()`](Self::tree)
+    /// and traversal helpers (`forward()`, `backward()`, `hit()`, etc.) to walk
+    /// sibling/parent nodes without taking `&BaseDocument` as a parameter on
+    /// every method. The pointer is set once at creation and never changes.
+    ///
+    /// # Safety
+    /// - This is a `*const` pointer because we only ever create shared references
+    ///   (`&Slab<Node>`) via `tree()`, never mutable references. This eliminates
+    ///   potential aliasing concerns under Stacked Borrows.
+    /// - The `Slab<Node>` must outlive all `Node`s it contains (guaranteed by
+    ///   `Box<Slab<Node>>` ownership in `BaseDocument`).
+    /// - The pointer is set during `Node::new()` and never modified thereafter.
+    tree: *const Slab<Node>,
 
     /// Our Id
     pub id: usize,
@@ -131,12 +142,28 @@ pub struct Node {
     pub transform: Option<Affine>,
 }
 
+// SAFETY: `Node` contains `Cell` and `RefCell` fields (`layout_parent`,
+// `layout_children`, `paint_children`) which are `!Sync`, and a raw `*const
+// Slab<Node>` pointer.
+//
+// `*const` pointers are `Send + Sync`, so the pointer itself doesn't prevent
+// these impls. The soundness concerns are about the `Cell`/`RefCell` fields.
+//
+// These impls are required for the `parallel-construct` feature which uses
+// Rayon to parallelize inline layout construction across threads via shared
+// `&Slab<Node>` references.
+//
+// Soundness argument: during parallel construction, each Rayon worker thread
+// borrows the slab immutably via `tree()` and never mutates `Cell`/`RefCell`
+// state on nodes it didn't allocate. The single-threaded write phase happens
+// before the parallel read phase (typical map-then-reduce pattern), so there
+// is no concurrent mutation of any single `Node`.
 unsafe impl Send for Node {}
 unsafe impl Sync for Node {}
 
 impl Node {
     pub(crate) fn new(
-        tree: *mut Slab<Node>,
+        tree: *const Slab<Node>,
         id: usize,
         guard: SharedRwLock,
         data: NodeData,
