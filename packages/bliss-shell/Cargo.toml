@@ -2,7 +2,7 @@
 name = "bliss-shell"
 description = "Bliss application shell"
 documentation = "https://docs.rs/bliss-shell"
-version = "0.2.99"
+version.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -22,6 +22,7 @@ tracing = ["dep:tracing", "bliss-dom/tracing"]
 file_dialog = ["dep:rfd"]
 # Enables a data-uri-only NetProvider. Only needed if you aren't using the regular NetProvider
 data-uri = ["dep:data-url"]
+custom-widget = ["bliss-dom/custom-widget"]
 
 [dependencies]
 # Bliss dependencies
@@ -40,6 +41,13 @@ accesskit_xplat = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 futures-util = { workspace = true }
 data-url = { workspace = true, optional = true }
+
+# WASM
+web-time = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["HtmlCanvasElement", "Window"] }
+wasm-bindgen = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6.0" }

@@ -1,54 +1,54 @@
 [workspace]
 members = [
-  "packages/accesskit_xplat",
-  "packages/debug_timer",
-  "packages/bliss-traits",
-  "packages/bliss-dom",
-  "packages/bliss-html",
-  "packages/bliss-net",
-  "packages/bliss-paint",
-  "packages/bliss-shell",
-  "packages/bliss",
-  "packages/stylo_taffy",
+    "packages/accesskit_xplat",
+    "packages/debug_timer",
+    "packages/bliss-traits",
+    "packages/bliss-dom",
+    "packages/bliss-html",
+    "packages/bliss-net",
+    "packages/bliss-paint",
+    "packages/bliss-shell",
+    "packages/bliss",
+    "packages/stylo_taffy",
 ]
 exclude = ["sites"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.99"
+version = "0.3.0-alpha.4"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/nixpt/bliss-engine"
 repository = "https://github.com/nixpt/bliss-engine"
 categories = ["gui"]
 edition = "2024"
-rust-version = "1.90.0"
+rust-version = "1.89.0"
 
 [workspace.dependencies]
-# Bliss dependencies(in-repo)
-bliss = { version = "0.2.0", path = "./packages/bliss" }
-bliss-dom = { version = "0.2.0", path = "./packages/bliss-dom", default-features = false }
-bliss-html = { version = "0.2.0", path = "./packages/bliss-html", default-features = false }
-bliss-net = { version = "0.2.0", path = "./packages/bliss-net", default-features = false }
-bliss-paint = { version = "0.2.0", path = "./packages/bliss-paint", default-features = false }
-bliss-shell = { version = "0.2.0", path = "./packages/bliss-shell", default-features = false }
-bliss-traits = { version = "0.2.0", path = "./packages/bliss-traits", default-features = false }
-stylo_taffy = { version = "0.2.0", path = "./packages/stylo_taffy", default-features = false }
+# Bliss dependencies (in-repo)
+bliss = { version = "=0.3.0-alpha.4", path = "./packages/bliss" }
+bliss-dom = { version = "=0.3.0-alpha.4", path = "./packages/bliss-dom", default-features = false }
+bliss-html = { version = "=0.3.0-alpha.4", path = "./packages/bliss-html", default-features = false }
+bliss-net = { version = "=0.3.0-alpha.4", path = "./packages/bliss-net", default-features = false }
+bliss-paint = { version = "=0.3.0-alpha.4", path = "./packages/bliss-paint", default-features = false }
+bliss-shell = { version = "=0.3.0-alpha.4", path = "./packages/bliss-shell", default-features = false }
+bliss-traits = { version = "=0.3.0-alpha.4", path = "./packages/bliss-traits", default-features = false }
+stylo_taffy = { version = "=0.3.0-alpha.4", path = "./packages/stylo_taffy", default-features = false }
 debug_timer = { version = "0.1.2", path = "./packages/debug_timer" }
 accesskit_xplat = { version = "0.1", path = "./packages/accesskit_xplat", default-features = false }
 
 # Servo dependencies
-style = { version = "0.11.0", package = "stylo" }
-style_traits = { version = "0.11.0", package = "stylo_traits" }
-style_atoms = { version = "0.11.0", package = "stylo_atoms" }
-style_config = { version = "0.11.0", package = "stylo_config" }
-style_dom = { version = "0.11.0", package = "stylo_dom" }
-selectors = { version = "0.35.0", package = "selectors" }
-cssparser = { version = "0.36" }
+style = { version = "0.17.0", package = "stylo" }
+style_traits = { version = "0.17.0", package = "stylo_traits" }
+style_atoms = { version = "0.17.0", package = "stylo_atoms" }
+style_config = { version = "0.17.0", package = "stylo_static_prefs" }
+style_dom = { version = "0.17.0", package = "stylo_dom" }
+selectors = { version = "0.38.0", package = "selectors" }
+cssparser = { version = "0.37.0" }
 
 # HTML5ever dependencies
-markup5ever = "0.37.0" # needs to match stylo web_atoms version
-html5ever = "0.37.0"   # needs to match stylo web_atoms version
-xml5ever = "0.37.0"    # needs to match stylo web_atoms version
+markup5ever = "0.39.0" # needs to match stylo web_atoms version
+html5ever = "0.39.0"   # needs to match stylo web_atoms version
+xml5ever = "0.39.0"    # needs to match stylo web_atoms version
 
 # Other Servo dependencies
 euclid = "0.22"
@@ -56,47 +56,37 @@ atomic_refcell = "0.1.13"
 app_units = "0.7.5"
 smallvec = "1"
 
-# DioxusLabs dependencies
-# Taffy
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "25759dad44d8350743a4e866fee54962f996895a", default-features = false, features = [
-  "std",
-  "flexbox",
-  "grid",
-  "block_layout",
-  "content_size",
-  "calc",
-  "detailed_layout_info",
+# Taffy + Parley + Fontations
+taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = [
+    "std",
+    "flexbox",
+    "grid",
+    "block_layout",
+    "content_size",
+    "calc",
+    "detailed_layout_info",
 ] }
+parley = { version = "0.9", default-features = false, features = ["std"] }
+skrifa = { version = "0.42", default-features = false, features = [
+    "std",
+] } # Should match parley and vello versions
 
 # AnyRender
-anyrender = { version = "0.7" }
-anyrender_vello = { version = "0.7" }
-anyrender_vello_cpu = { version = "0.9" }
-anyrender_vello_hybrid = { version = "0.2" }
-anyrender_skia = { version = "0.4" }
-anyrender_svg = { version = "0.8" }
-wgpu_context = { version = "0.3" }
+anyrender = { version = "0.10.0" }
+anyrender_serialize = { version = "0.3.0" }
+anyrender_skia = { version = "0.8.0" }
+anyrender_vello = { version = "0.10.1" }
+anyrender_vello_cpu = { version = "0.12.1" }
+anyrender_vello_hybrid = { version = "0.5.1" }
+anyrender_svg = { version = "0.11.0" }
+wgpu_context = { version = "0.6.0" }
 
 # Linebender + Fontations + WGPU + SVG
 color = "0.3"
 linebender_resource_handle = "0.1"
 peniko = "0.6.0"
-kurbo = "0.13"
-parley = { git = "https://github.com/linebender/parley", rev = "4f1bedf08c9d98a646975806adccc6ca41a08841", default-features = false, features = [
-  "std",
-] }
-skrifa = { version = "0.37", default-features = false, features = [
-  "std",
-] } # Should match parley version
-wgpu = "27"
-softbuffer = "0.4"
-pixels = "0.15"
-vello = { version = "0.6", features = ["wgpu"] }
-vello_encoding = { version = "0.6", default-features = false }
-vello_cpu = { version = "0.0.3", default-features = false, features = [
-  "std",
-  "text",
-] }
+kurbo = "0.13.1"
+wgpu = "29"
 usvg = "0.46"
 
 # Windowing & Input
@@ -113,25 +103,33 @@ url = "2.5.0"
 http = "1.1.0"
 data-url = "0.3.1"
 tokio = "1.42"
-reqwest = { version = "0.12", default-features = false }
-reqwest-middleware = { version = "0.4.2", default-features = false }
-http-cache-reqwest = { version = "=1.0.0-alpha.2", default-features = false }
+reqwest = { version = "0.13", default-features = false }
+reqwest-middleware = { version = "0.5.1", default-features = false }
+http-cache-reqwest = { version = "=1.0.0-alpha.6", default-features = false }
+http-cache = { version = "=1.0.0-alpha.6", default-features = false }
 
 # Media & Decoding
 image = { version = "=0.25.6", default-features = false }
-woff = { version = "0.6", default-features = false }
-woff2 = "0.3"
 wuff = "0.2"
 html-escape = "0.2.13"
 percent-encoding = "2.3.1"
-png = "0.17"
+png = "0.18"
 serde = "1"
 
-# Dioxus Native
+# Webbrowser helper
 webbrowser = "1.0"
+directories = "6.0.0"
+
+# WASM
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+tracing-wasm = "0.2.1"
+web-sys = "0.3.98"
+web-time = "1"
+console_error_panic_hook = "0.1"
 
 # Other dependencies
-rustc-hash = "1.1.0"
+rustc-hash = "2.1.2"
 bytes = "1.7.1"
 slab = "0.4.9"
 tracing = "0.1.40"
@@ -142,7 +140,6 @@ pollster = "0.4"
 smol_str = "0.3"
 bitflags = "2.8.0"
 bytemuck = "1"
-fastrand = "2.3.0"
 rayon = "1"
 thread_local = "1"
 
@@ -176,6 +173,17 @@ panic = "unwind"
 inherits = "small"
 opt-level = "z"
 
+[profile.tiny.package.fearless_simd]
+opt-level = 3
+[profile.tiny.package.vello_cpu]
+opt-level = 3
+[profile.tiny.package.taffy]
+opt-level = 3
+[profile.tiny.package.harfrust]
+opt-level = 3
+[profile.tiny.package.skrifa]
+opt-level = 3
+
 # This is a "virtual package"
 # It is not meant to be published, but is used so "cargo run --example XYZ" works properly
 [package]
@@ -207,6 +215,7 @@ tokio = { workspace = true, features = ["macros"] }
 image = { workspace = true }
 png = { workspace = true }
 peniko = { workspace = true }
+color = { workspace = true }
 boa_engine = "0.20.0"
 env_logger = "0.11"
 tracing-subscriber = "0.3"
@@ -226,9 +235,17 @@ tracing-subscriber = "0.3"
 # vello_common = { path = "../vello/sparse_strips/vello_common" }
 
 # [patch.crates-io]
+# style = { path = "../stylo/style", package = "stylo" }
+# style_traits = { path = "../stylo/style_traits", package = "stylo_traits" }
+# style_atoms = { path = "../stylo/stylo_atoms", package = "stylo_atoms" }
+# style_config = { path = "../stylo/stylo_config", package = "stylo_config" }
+# style_dom = { path = "../stylo/stylo_dom", package = "stylo_dom" }
+# selectors = { path = "../stylo/selectors", package = "selectors" }
+
+# [patch.crates-io]
 # [patch."https://github.com/dioxuslabs/taffy"]
 # taffy = { path = "../taffy" }
 
-# [patch."https://github.com/nicoburns/parley"]
+# [patch."https://github.com/linebender/parley"]
 # parley = { path = "../parley/parley" }
 # fontique = { path = "../parley/fontique" }

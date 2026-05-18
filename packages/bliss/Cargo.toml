@@ -2,7 +2,7 @@
 name = "bliss"
 description = "High-level APIs for rendering HTML with Bliss"
 documentation = "https://docs.rs/bliss"
-version = "0.2.99"
+version.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -11,10 +11,10 @@ edition.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["net", "accessibility"]
+default = ["net", "accessibility", "tracing"]
 net = ["dep:tokio", "dep:url", "dep:bliss-net"]
 accessibility = ["bliss-shell/accessibility"]
-tracing = ["bliss-shell/tracing"]
+tracing = ["dep:tracing", "bliss-shell/tracing", "bliss-html/tracing", "bliss-net/tracing"]
 
 [dependencies]
 # Bliss dependencies
@@ -28,6 +28,11 @@ bliss-net = { workspace = true, optional = true }
 
 # IO & Networking
 url = { workspace = true, features = ["serde"], optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }
+
+tracing = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 
 [package.metadata.docs.rs]

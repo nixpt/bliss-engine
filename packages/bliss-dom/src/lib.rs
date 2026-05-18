@@ -46,7 +46,7 @@ mod config;
 mod debug;
 mod events;
 mod font_metrics;
-mod form;
+pub mod form;
 mod html;
 /// Integration of taffy and the DOM.
 mod layout;
@@ -59,9 +59,13 @@ mod script;
 /// Implementations that interact with servo's style engine
 mod stylo;
 mod stylo_to_cursor_icon;
+mod stylo_to_kurbo;
 mod stylo_to_parley;
 mod traversal;
+
 mod url;
+
+pub use stylo_to_kurbo::resolve_2d_transform;
 
 pub mod net;
 pub mod util;
@@ -69,7 +73,10 @@ pub mod util;
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
-pub use config::DocumentConfig;
+#[cfg(feature = "custom-widget")]
+pub use crate::node::Widget;
+
+pub use config::{DocumentConfig, StyleThreading};
 pub use document::{BaseDocument, DocGuard, DocGuardMut, Document, PlainDocument};
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,
@@ -84,7 +91,42 @@ pub use script::{
 };
 pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
+pub use style::media_queries::MediaType;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
 pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
-pub use util::Point;
+pub use util::{Point, decode_font_bytes};
+pub use form::RequestContentType;
+
+/// Convenience builder for the one-font case: produces a [`FontContext`] with
+/// system-font discovery disabled and the supplied font registered as the
+/// fallback for every generic family. The standard setup for WASM, where
+/// browsers don't expose system fonts. WOFF/WOFF2 inputs are decoded
+/// automatically.
+pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
+    use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
+    use std::sync::Arc;
+
+    let mut ctx = FontContext {
+        source_cache: SourceCache::new_shared(),
+        collection: Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        }),
+    };
+    let decoded = decode_font_bytes(font_data).into_owned();
+    let registered = ctx
+        .collection
+        .register_fonts(Blob::new(Arc::new(decoded) as _), None);
+    let family_ids: Vec<_> = registered.iter().map(|(id, _)| *id).collect();
+    for generic in [
+        GenericFamily::SansSerif,
+        GenericFamily::Serif,
+        GenericFamily::Monospace,
+        GenericFamily::SystemUi,
+    ] {
+        ctx.collection
+            .append_generic_families(generic, family_ids.iter().copied());
+    }
+    ctx
+}

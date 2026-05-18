@@ -43,7 +43,8 @@ impl BaseDocument {
             .first_element_child()
             .is_none()
         {
-            println!("No DOM - not resolving");
+            #[cfg(feature = "tracing")]
+            tracing::warn!("No DOM - not resolving");
             return;
         }
 
@@ -157,6 +158,12 @@ impl BaseDocument {
         resolve_layout_children_recursive(self, self.root_node().id);
 
         fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: usize) {
+            // Anonymous blocks and pseudo-elements can be removed from the slab
+            // between render passes. Bail out rather than panicking on a stale key.
+            if doc.nodes.get(node_id).is_none() {
+                return;
+            }
+
             let mut damage = doc.nodes[node_id].damage().unwrap_or(ALL_DAMAGE);
             let _flags = doc.nodes[node_id].flags;
 
@@ -170,7 +177,7 @@ impl BaseDocument {
                 for child_id in layout_children.iter().copied() {
                     resolve_layout_children_recursive(doc, child_id);
                     doc.nodes[child_id].layout_parent.set(Some(node_id));
-                    if let Some(data) = doc.nodes[child_id].stylo_element_data.get_mut() {
+                    if let Some(mut data) = doc.nodes[child_id].stylo_element_data.get_mut() {
                         data.damage
                             .remove(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                     }
@@ -185,8 +192,12 @@ impl BaseDocument {
                 //if damage.contains(CONSTRUCT_DESCENDENT) {
                 let layout_children = doc.nodes[node_id].layout_children.borrow_mut().take();
                 if let Some(layout_children) = layout_children {
-                    // Recurse into previously computed layout children
                     for child_id in layout_children.iter().copied() {
+                        // Anonymous blocks and pseudo-elements can be removed from the
+                        // slab between render passes; skip stale IDs.
+                        if !doc.nodes.contains(child_id) {
+                            continue;
+                        }
                         resolve_layout_children_recursive(doc, child_id);
                         doc.nodes[child_id].layout_parent.set(Some(node_id));
                     }

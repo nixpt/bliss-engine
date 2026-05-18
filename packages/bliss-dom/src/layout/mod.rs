@@ -72,11 +72,16 @@ impl BaseDocument {
             NodeData::Text(data) => {
                 // With the new "inline context" architecture all text nodes should be wrapped in an "inline layout context"
                 // and should therefore never be measured individually.
-                println!(
-                    "ERROR: Tried to lay out text node individually ({})",
-                    usize::from(node_id)
+                #[cfg(feature = "tracing")]
+                tracing::error!(
+                    node_id = usize::from(node_id),
+                    data = ?data,
+                    "Tried to lay out text node individually",
                 );
-                dbg!(data);
+
+                #[cfg(not(feature = "tracing"))]
+                let _ = data;
+
                 taffy::LayoutOutput::HIDDEN
                 // unreachable!();
 
@@ -157,7 +162,11 @@ impl BaseDocument {
                                 &node.style,
                                 resolve_calc_value,
                                 |_known_size, _available_space| taffy::Size {
-                                    width: 300.0,
+                                    width: match inputs.available_space.width {
+                                        AvailableSpace::Definite(limit) => limit.min(300.0),
+                                        AvailableSpace::MinContent => 0.0,
+                                        AvailableSpace::MaxContent => 300.0,
+                                    },
                                     height: resolved_line_height.unwrap_or(16.0),
                                 },
                             );
@@ -340,30 +349,21 @@ impl taffy::CacheTree for BaseDocument {
     fn cache_get(
         &self,
         node_id: NodeId,
-        known_dimensions: Size<Option<f32>>,
-        available_space: Size<AvailableSpace>,
-        run_mode: taffy::RunMode,
+        inputs: &taffy::LayoutInput,
     ) -> Option<taffy::LayoutOutput> {
-        self.node_from_id(node_id)
-            .cache
-            .get(known_dimensions, available_space, run_mode)
+        self.node_from_id(node_id).cache.get(inputs)
     }
 
     #[inline]
     fn cache_store(
         &mut self,
         node_id: NodeId,
-        known_dimensions: Size<Option<f32>>,
-        available_space: Size<AvailableSpace>,
-        run_mode: taffy::RunMode,
+        inputs: &taffy::LayoutInput,
         layout_output: taffy::LayoutOutput,
     ) {
-        self.node_from_id_mut(node_id).cache.store(
-            known_dimensions,
-            available_space,
-            run_mode,
-            layout_output,
-        );
+        self.node_from_id_mut(node_id)
+            .cache
+            .store(inputs, layout_output);
     }
 
     #[inline]

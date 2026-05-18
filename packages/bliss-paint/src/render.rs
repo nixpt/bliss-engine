@@ -2,17 +2,16 @@ mod background;
 mod box_shadow;
 mod form_controls;
 
-use std::any::Any;
 use std::collections::HashMap;
 
 use super::kurbo_css::{CssBox, Edge};
-use crate::SELECTION_COLOR;
 use crate::color::{Color, ToColorColor};
 use crate::debug_overlay::render_debug_overlay;
 use crate::kurbo_css::NonUniformRoundedRectRadii;
 use crate::layers::LayerManager;
 use crate::sizing::compute_object_fit;
-use anyrender::{CustomPaint, Paint, PaintScene};
+use crate::{CustomWidgetSceneMap, SELECTION_COLOR};
+use anyrender::{PaintScene, Scene};
 use bliss_dom::node::{
     ListItemLayout, ListItemLayoutPosition, Marker, NodeData, RasterImageData, SpecialElementData,
     TextInputData, TextNodeData,
@@ -20,7 +19,6 @@ use bliss_dom::node::{
 use bliss_dom::{BaseDocument, ElementData, Node, local_name};
 use bliss_traits::devtools::DevtoolSettings;
 
-use euclid::Transform3D;
 use style::values::computed::BorderCornerRadius;
 use style::{
     computed_values::border_collapse::T as BorderCollapse,
@@ -35,14 +33,14 @@ use style::{
     },
 };
 
-use kurbo::{self, Affine, Insets, Point, Rect, Stroke, Vec2};
+use kurbo::{self, Affine, BezPath, Insets, Point, Rect, Stroke, Vec2};
 use peniko::{self, Fill, ImageData, ImageSampler};
-use style::values::generics::color::GenericColor;
+use style::values::generics::color::{ColorOrAuto, GenericColor};
 use taffy::Layout;
 
 /// A short-lived struct which holds a bunch of parameters for rendering a scene so
 /// that we don't have to pass them down as parameters
-pub struct BlissDomPainter<'dom> {
+pub struct BlissDomPainter<'dom, 'a> {
     /// Input parameters (read only) for generating the Scene
     pub(crate) dom: &'dom BaseDocument,
     pub(crate) scale: f64,
@@ -53,9 +51,12 @@ pub struct BlissDomPainter<'dom> {
     pub(crate) layer_manager: LayerManager,
     /// Cached selection ranges for O(1) lookup: node_id -> (start_offset, end_offset)
     pub(crate) selection_ranges: HashMap<usize, (usize, usize)>,
+
+    // Pre-computed `Scene`s for each CustomWidget
+    pub(crate) custom_widget_scenes: &'a CustomWidgetSceneMap,
 }
 
-impl<'dom> BlissDomPainter<'dom> {
+impl<'dom, 'a> BlissDomPainter<'dom, 'a> {
     /// Create a new BlissDomPainter for the given document
     pub fn new(
         dom: &'dom BaseDocument,
@@ -64,6 +65,7 @@ impl<'dom> BlissDomPainter<'dom> {
         height: u32,
         initial_x: f64,
         initial_y: f64,
+        custom_widget_scenes: &'a CustomWidgetSceneMap,
     ) -> Self {
         let selection_ranges: HashMap<usize, (usize, usize)> = dom
             .get_text_selection_ranges()
@@ -82,6 +84,7 @@ impl<'dom> BlissDomPainter<'dom> {
             initial_y,
             layer_manager,
             selection_ranges,
+            custom_widget_scenes,
         }
     }
 
@@ -102,6 +105,10 @@ impl<'dom> BlissDomPainter<'dom> {
     /// This assumes styles are resolved and layout is complete.
     /// Make sure you do those before trying to render
     pub fn paint_scene(&self, scene: &mut impl PaintScene) {
+        if self.dom.has_pending_critical_resources() {
+            return;
+        }
+
         // Simply render the document (the root element (note that this is not the same as the root node)))
         // scene.reset();
         let viewport_scroll = self.dom.as_ref().viewport_scroll();
@@ -265,7 +272,12 @@ impl<'dom> BlissDomPainter<'dom> {
             return;
         }
 
-        let mut cx = self.element_cx(node, layout, box_position);
+        #[cfg(feature = "custom-widget")]
+        let custom_widget_scene = self.custom_widget_scenes.get(&(self.dom.id(), node_id));
+        #[cfg(not(feature = "custom-widget"))]
+        let custom_widget_scene = None;
+
+        let mut cx = self.element_cx(node, layout, box_position, custom_widget_scene);
 
         cx.draw_outline(scene);
         cx.draw_outset_box_shadow(scene);
@@ -317,7 +329,8 @@ impl<'dom> BlissDomPainter<'dom> {
                         cx.draw_image(scene);
                         #[cfg(feature = "svg")]
                         cx.draw_svg(scene);
-                        cx.draw_canvas(scene);
+                        #[cfg(feature = "custom-widget")]
+                        cx.draw_custom_widget(scene);
                         cx.draw_sub_document(scene);
                         cx.draw_input(scene);
                         cx.draw_text_input_text(scene, content_position);
@@ -348,17 +361,18 @@ impl<'dom> BlissDomPainter<'dom> {
         }
     }
 
-    fn element_cx<'w>(
-        &'w self,
-        node: &'w Node,
+    fn element_cx(
+        &'dom self,
+        node: &'dom Node,
         layout: Layout,
         box_position: Point,
-    ) -> ElementCx<'w> {
+        custom_widget_scene: Option<&'a Scene>,
+    ) -> ElementCx<'dom, 'a> {
         let style = node
             .stylo_element_data
-            .borrow()
+            .primary_styles()
             .as_ref()
-            .map(|element_data| element_data.styles.primary().clone())
+            .map(|styles| (*styles).clone())
             .unwrap_or(
                 ComputedValues::initial_values_with_font_override(Font::initial_values()).to_arc(),
             );
@@ -378,8 +392,8 @@ impl<'dom> BlissDomPainter<'dom> {
         let reference_box = euclid::Rect::new(
             euclid::Point2D::new(CSSPixelLength::new(0.0), CSSPixelLength::new(0.0)),
             euclid::Size2D::new(
-                CSSPixelLength::new((frame.border_box.width() / scale) as f32),
-                CSSPixelLength::new((frame.border_box.height() / scale) as f32),
+                CSSPixelLength::new(frame.border_box.width() as f32),
+                CSSPixelLength::new(frame.border_box.height() as f32),
             ),
         );
 
@@ -387,46 +401,10 @@ impl<'dom> BlissDomPainter<'dom> {
         //
         // TODO: Handle hit testing correctly for transformed nodes
         // TODO: Implement nested transforms
-        let (t, has_3d) = &style
-            .get_box()
-            .transform
-            .to_transform_3d_matrix(Some(&reference_box))
-            .unwrap_or((Transform3D::default(), false));
-        if !has_3d {
-            // See: https://drafts.csswg.org/css-transforms-2/#two-dimensional-subset
-            // And https://docs.rs/kurbo/latest/kurbo/struct.Affine.html#method.new
-            let kurbo_transform = Affine::new(
-                [
-                    t.m11,
-                    t.m12,
-                    t.m21,
-                    t.m22,
-                    // Scale the translation but not the scale or skew
-                    t.m41 * scale as f32,
-                    t.m42 * scale as f32,
-                ]
-                .map(|v| v as f64),
-            );
-
-            // Apply the transform origin by:
-            //   - Translating by the origin offset
-            //   - Applying our transform
-            //   - Translating by the inverse of the origin offset
-            let transform_origin = &style.get_box().transform_origin;
-            let origin_translation = Affine::translate(Vec2 {
-                x: transform_origin
-                    .horizontal
-                    .resolve(CSSPixelLength::new(frame.border_box.width() as f32))
-                    .px() as f64,
-                y: transform_origin
-                    .vertical
-                    .resolve(CSSPixelLength::new(frame.border_box.height() as f32))
-                    .px() as f64,
-            });
-            let kurbo_transform =
-                origin_translation * kurbo_transform * origin_translation.inverse();
-
-            transform *= kurbo_transform;
+        if let Some(style_transform) =
+            bliss_dom::resolve_2d_transform(style.get_box(), reference_box, scale)
+        {
+            transform *= style_transform
         }
 
         let element = node.element_data().unwrap();
@@ -445,6 +423,7 @@ impl<'dom> BlissDomPainter<'dom> {
             text_input: element.text_input_data(),
             list_item: element.list_item_data.as_deref(),
             devtools: self.dom.devtools(),
+            custom_widget_scene,
         }
     }
 }
@@ -477,20 +456,22 @@ fn to_peniko_image(image: &RasterImageData, quality: peniko::ImageQuality) -> pe
 }
 
 /// A context of loaded and hot data to draw the element from
-struct ElementCx<'a> {
-    context: &'a BlissDomPainter<'a>,
+struct ElementCx<'dom, 'a> {
+    context: &'dom BlissDomPainter<'dom, 'a>,
     frame: CssBox,
     style: style::servo_arc::Arc<ComputedValues>,
     pos: Point,
     scale: f64,
-    node: &'a Node,
-    element: &'a ElementData,
+    node: &'dom Node,
+    element: &'dom ElementData,
     transform: Affine,
     #[cfg(feature = "svg")]
-    svg: Option<&'a usvg::Tree>,
-    text_input: Option<&'a TextInputData>,
-    list_item: Option<&'a ListItemLayout>,
-    devtools: &'a DevtoolSettings,
+    svg: Option<&'dom usvg::Tree>,
+    text_input: Option<&'dom TextInputData>,
+    list_item: Option<&'dom ListItemLayout>,
+    devtools: &'dom DevtoolSettings,
+    #[cfg_attr(not(feature = "custom-widget"), expect(unused))]
+    custom_widget_scene: Option<&'a Scene>,
 }
 
 /// Converts parley BoundingBox into peniko Rect
@@ -498,7 +479,7 @@ fn convert_rect(rect: &parley::BoundingBox) -> kurbo::Rect {
     peniko::kurbo::Rect::new(rect.x0, rect.y0, rect.x1, rect.y1)
 }
 
-impl ElementCx<'_> {
+impl ElementCx<'_, '_> {
     fn draw_inline_layout(&self, scene: &mut impl PaintScene, pos: Point) {
         if self.node.flags.is_inline_root() {
             let text_layout = self.element
@@ -528,6 +509,7 @@ impl ElementCx<'_> {
                 text_layout.layout.lines(),
                 self.context.dom,
                 transform,
+                self.scale,
             );
         }
     }
@@ -558,13 +540,16 @@ impl ElementCx<'_> {
                     );
                 }
                 if let Some(cursor) = input_data.editor.cursor_geometry(1.5) {
-                    // TODO: Use the `caret-color` attribute here if present.
                     let color = self.style.get_inherited_text().color;
+                    let caret_color = match &self.style.get_inherited_ui().caret_color.0 {
+                        ColorOrAuto::Auto => color,
+                        ColorOrAuto::Color(caret_color) => caret_color.resolve_to_absolute(&color),
+                    };
 
                     scene.fill(
                         Fill::NonZero,
                         transform,
-                        color.as_srgb_color(),
+                        caret_color.as_srgb_color(),
                         None,
                         &convert_rect(&cursor),
                     );
@@ -577,6 +562,7 @@ impl ElementCx<'_> {
                 input_data.editor.try_layout().unwrap().lines(),
                 self.context.dom,
                 transform,
+                self.scale,
             );
         }
     }
@@ -616,7 +602,13 @@ impl ElementCx<'_> {
             let transform =
                 Affine::translate((pos.x * self.scale, pos.y * self.scale)) * self.transform;
 
-            crate::text::stroke_text(scene, layout.lines(), self.context.dom, transform);
+            crate::text::stroke_text(
+                scene,
+                layout.lines(),
+                self.context.dom,
+                transform,
+                self.scale,
+            );
         }
     }
 
@@ -745,28 +737,15 @@ impl ElementCx<'_> {
         }
     }
 
-    fn draw_canvas(&self, scene: &mut impl PaintScene) {
-        if let Some(custom_paint_source) = self.element.canvas_data() {
-            let width = self.frame.content_box.width() as u32;
-            let height = self.frame.content_box.height() as u32;
+    #[cfg(feature = "custom-widget")]
+    fn draw_custom_widget(&self, scene: &mut impl PaintScene) {
+        if let Some(widget_scene) = self.custom_widget_scene {
             let x = self.frame.content_box.origin().x;
             let y = self.frame.content_box.origin().y;
-
             let transform = self.transform.then_translate(Vec2 { x, y });
 
-            scene.fill(
-                Fill::NonZero,
-                transform,
-                // TODO: replace `Arc<dyn Any>` with `CustomPaint` in API?
-                Paint::Custom(&CustomPaint {
-                    source_id: custom_paint_source.custom_paint_source_id,
-                    width,
-                    height,
-                    scale: self.scale,
-                } as &(dyn Any + Send + Sync)),
-                None,
-                &Rect::from_origin_size((0.0, 0.0), (width as f64, height as f64)),
-            );
+            // TODO: eliminate clone
+            scene.append_scene(widget_scene.clone(), transform);
         }
     }
 
@@ -779,8 +758,15 @@ impl ElementCx<'_> {
             let initial_y = self.pos.y + self.frame.content_box.origin().y;
             // let transform = self.transform.then_translate(Vec2 { x, y });
 
-            let painter =
-                BlissDomPainter::new(&sub_doc, scale, width, height, initial_x, initial_y);
+            let painter = BlissDomPainter::new(
+                &sub_doc,
+                scale,
+                width,
+                height,
+                initial_x,
+                initial_y,
+                self.custom_widget_scenes,
+            );
             painter.paint_scene(scene);
         }
     }
@@ -803,8 +789,69 @@ impl ElementCx<'_> {
 
     /// Draw all borders for a node
     fn draw_border(&self, scene: &mut impl PaintScene) {
-        for edge in [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left] {
-            self.draw_border_edge(scene, edge);
+        let style = &*self.style;
+        let border = style.get_border();
+        let current_color = style.clone_color();
+
+        let mut borders: [(Color, Option<BezPath>); 4] = [
+            (Color::TRANSPARENT, None),
+            (Color::TRANSPARENT, None),
+            (Color::TRANSPARENT, None),
+            (Color::TRANSPARENT, None),
+        ];
+        let mut count = 0;
+
+        for &edge in &[Edge::Top, Edge::Right, Edge::Bottom, Edge::Left] {
+            let color = match edge {
+                Edge::Top => &border.border_top_color,
+                Edge::Right => &border.border_right_color,
+                Edge::Bottom => &border.border_bottom_color,
+                Edge::Left => &border.border_left_color,
+            }
+            .resolve_to_absolute(&current_color)
+            .as_srgb_color();
+
+            if color.components[3] > 0.0 {
+                borders[count] = (color, Some(self.frame.border_edge_shape(edge)));
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return;
+        }
+
+        // Group together identical colors by sorting.
+        let active_slice = &mut borders[0..count];
+        active_slice.sort_unstable_by(|a, b| {
+            a.0.components
+                .partial_cmp(&b.0.components)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut start_border_index = 0;
+        while start_border_index < count {
+            let color = borders[start_border_index].0;
+            let mut next_border_index = start_border_index + 1;
+            let has_multiple_edges =
+                next_border_index < count && borders[next_border_index].0 == color;
+            if has_multiple_edges {
+                let mut border_path = borders[start_border_index].1.take().unwrap();
+                while next_border_index < count && borders[next_border_index].0 == color {
+                    border_path.extend(&borders[next_border_index].1.take().unwrap());
+                    next_border_index += 1;
+                }
+                scene.fill(Fill::NonZero, self.transform, color, None, &border_path);
+            } else {
+                scene.fill(
+                    Fill::NonZero,
+                    self.transform,
+                    color,
+                    None,
+                    borders[start_border_index].1.as_ref().unwrap(),
+                );
+            }
+            start_border_index = next_border_index;
         }
     }
 
@@ -897,38 +944,6 @@ impl ElementCx<'_> {
         }
     }
 
-    /// Draw a single border edge for a node
-    fn draw_border_edge(&self, scene: &mut impl PaintScene, edge: Edge) {
-        let style = &*self.style;
-        let border = style.get_border();
-        let path = self.frame.border_edge_shape(edge);
-
-        let current_color = style.clone_color();
-        let color = match edge {
-            Edge::Top => border
-                .border_top_color
-                .resolve_to_absolute(&current_color)
-                .as_srgb_color(),
-            Edge::Right => border
-                .border_right_color
-                .resolve_to_absolute(&current_color)
-                .as_srgb_color(),
-            Edge::Bottom => border
-                .border_bottom_color
-                .resolve_to_absolute(&current_color)
-                .as_srgb_color(),
-            Edge::Left => border
-                .border_left_color
-                .resolve_to_absolute(&current_color)
-                .as_srgb_color(),
-        };
-
-        let alpha = color.components[3];
-        if alpha != 0.0 {
-            scene.fill(Fill::NonZero, self.transform, color, None, &path);
-        }
-    }
-
     /// ❌ dotted - Defines a dotted border
     /// ❌ dashed - Defines a dashed border
     /// ✅ solid - Defines a solid border
@@ -970,8 +985,8 @@ impl ElementCx<'_> {
         scene.fill(Fill::NonZero, self.transform, color, None, &path);
     }
 }
-impl<'a> std::ops::Deref for ElementCx<'a> {
-    type Target = BlissDomPainter<'a>;
+impl<'dom, 'a> std::ops::Deref for ElementCx<'dom, 'a> {
+    type Target = BlissDomPainter<'dom, 'a>;
     fn deref(&self) -> &Self::Target {
         self.context
     }

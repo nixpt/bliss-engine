@@ -10,7 +10,6 @@ use crate::util::ImageType;
 use crate::{
     Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name, qual_name,
 };
-use bliss_traits::net::Request;
 use bliss_traits::shell::Viewport;
 use style::Atom;
 use style::invalidation::element::restyle_hints::RestyleHint;
@@ -36,6 +35,9 @@ enum SpecialOp {
     UnloadStylesheet(usize),
     LoadCustomPaintSource(usize),
     ProcessButtonInput(usize),
+    UnloadSubDocument(usize),
+    #[cfg(feature = "custom-widget")]
+    UnloadCustomWidget(usize),
 }
 
 pub struct DocumentMutator<'doc> {
@@ -132,13 +134,13 @@ impl DocumentMutator<'_> {
         data.flush_style_attribute(self.doc.guard(), &self.doc.url.url_extra_data());
 
         let id = self.doc.create_node(NodeData::Element(data));
-        let node = self.doc.get_node(id).unwrap();
+        let node = self.doc.get_node_mut(id).unwrap();
 
         // Initialise style data
-        *node.stylo_element_data.borrow_mut() = Some(style::data::ElementData {
+        *node.stylo_element_data.ensure_init_mut() = style::data::ElementData {
             damage: ALL_DAMAGE,
             ..Default::default()
-        });
+        };
 
         id
     }
@@ -215,7 +217,7 @@ impl DocumentMutator<'_> {
         self.doc.snapshot_node(node_id);
 
         let node = &mut self.doc.nodes[node_id];
-        if let Some(data) = &mut *node.stylo_element_data.borrow_mut() {
+        if let Some(mut data) = node.stylo_element_data.get_mut() {
             data.hint |= RestyleHint::restyle_subtree();
             data.damage.insert(ALL_DAMAGE);
         }
@@ -224,7 +226,7 @@ impl DocumentMutator<'_> {
         let parent = node.parent;
         if let Some(parent_id) = parent {
             let parent = &mut self.doc.nodes[parent_id];
-            if let Some(data) = &mut *parent.stylo_element_data.borrow_mut() {
+            if let Some(mut data) = parent.stylo_element_data.get_mut() {
                 data.hint |= RestyleHint::restyle_subtree();
             }
         }
@@ -239,6 +241,15 @@ impl DocumentMutator<'_> {
         let NodeData::Element(ref mut element) = node.data else {
             return;
         };
+
+        // If element is a CustomWidget, then Ccall attribute_changed on it
+        #[cfg(feature = "custom-widget")]
+        if let SpecialElementData::CustomWidget(widget_data) = &mut element.special_data {
+            let old_value = element.attrs.get(&name).as_ref().map(|attr| &*attr.value);
+            widget_data
+                .widget
+                .attribute_changed(&name.local, old_value, Some(value));
+        }
 
         element.attrs.set(name.clone(), value);
 
@@ -263,6 +274,7 @@ impl DocumentMutator<'_> {
 
         if *attr == local_name!("style") {
             element.flush_style_attribute(&self.doc.guard, &self.doc.url.url_extra_data());
+            node.mark_style_attr_updated();
             return;
         }
 
@@ -293,12 +305,10 @@ impl DocumentMutator<'_> {
 
         let node = &mut self.doc.nodes[node_id];
 
-        let mut stylo_element_data = node.stylo_element_data.borrow_mut();
-        if let Some(data) = &mut *stylo_element_data {
+        if let Some(mut data) = node.stylo_element_data.get_mut() {
             data.hint |= RestyleHint::restyle_subtree();
             data.damage.insert(ALL_DAMAGE);
         }
-        drop(stylo_element_data);
 
         // Mark ancestors dirty so the style traversal visits this subtree.
         // Without this, the traversal may skip nodes with pending RestyleHint/damage.
@@ -312,6 +322,15 @@ impl DocumentMutator<'_> {
         let had_attr = removed_attr.is_some();
         if !had_attr {
             return;
+        }
+
+        // If element is a CustomWidget, then call attribute_changed on it
+        #[cfg(feature = "custom-widget")]
+        if let SpecialElementData::CustomWidget(widget_data) = &mut element.special_data {
+            let old_value = removed_attr.as_ref().map(|attr| &*attr.value);
+            widget_data
+                .widget
+                .attribute_changed(&name.local, old_value, None);
         }
 
         if name.local == local_name!("id") {
@@ -339,6 +358,7 @@ impl DocumentMutator<'_> {
 
         if *attr == local_name!("style") {
             element.flush_style_attribute(&self.doc.guard, &self.doc.url.url_extra_data());
+            node.mark_style_attr_updated();
         } else if (tag, attr) == tag_and_attr!("canvas", "src") {
             self.recompute_is_animating = true;
         } else if (tag, attr) == tag_and_attr!("link", "href") {
@@ -360,6 +380,16 @@ impl DocumentMutator<'_> {
 
     pub fn remove_sub_document(&mut self, node_id: usize) {
         self.doc.remove_sub_document(node_id)
+    }
+
+    #[cfg(feature = "custom-widget")]
+    pub fn set_custom_widget(&mut self, node_id: usize, widget: Box<dyn crate::Widget>) {
+        self.doc.set_custom_widget(node_id, widget)
+    }
+
+    #[cfg(feature = "custom-widget")]
+    pub fn remove_custom_widget(&mut self, node_id: usize) {
+        self.doc.remove_custom_widget(node_id)
     }
 
     /// Remove the node from it's parent but don't drop it
@@ -392,7 +422,7 @@ impl DocumentMutator<'_> {
 
             // TODO: make this fine grained / conditional based on ElementSelectorFlags
             if parent_is_in_doc {
-                if let Some(data) = &mut *parent.stylo_element_data.borrow_mut() {
+                if let Some(mut data) = parent.stylo_element_data.get_mut() {
                     data.hint |= RestyleHint::restyle_subtree();
                 }
                 // Mark ancestors dirty so the style traversal visits this subtree.
@@ -412,7 +442,7 @@ impl DocumentMutator<'_> {
 
         // TODO: make this fine grained / conditional based on ElementSelectorFlags
         if parent_is_in_doc {
-            if let Some(data) = &mut *parent.stylo_element_data.borrow_mut() {
+            if let Some(mut data) = parent.stylo_element_data.get_mut() {
                 data.hint |= RestyleHint::restyle_subtree();
             }
             // Mark ancestors dirty so the style traversal visits this subtree.
@@ -465,7 +495,7 @@ impl DocumentMutator<'_> {
 
         // TODO: make this fine grained / conditional based on ElementSelectorFlags
         if new_parent_is_in_doc {
-            if let Some(data) = &mut *new_parent.stylo_element_data.borrow_mut() {
+            if let Some(mut data) = new_parent.stylo_element_data.get_mut() {
                 data.hint |= RestyleHint::restyle_subtree();
             }
             // Mark ancestors dirty so the style traversal visits this subtree.
@@ -489,7 +519,7 @@ impl DocumentMutator<'_> {
 
                 // TODO: make this fine grained / conditional based on ElementSelectorFlags
                 if child_was_in_doc {
-                    if let Some(data) = &mut *old_parent.stylo_element_data.borrow_mut() {
+                    if let Some(mut data) = old_parent.stylo_element_data.get_mut() {
                         data.hint |= RestyleHint::restyle_subtree();
                     }
                     // Mark ancestors dirty so the style traversal visits this subtree.
@@ -572,6 +602,9 @@ impl<'doc> DocumentMutator<'doc> {
                 SpecialOp::UnloadStylesheet(node_id) => self.unload_stylesheet(node_id),
                 SpecialOp::LoadCustomPaintSource(node_id) => self.load_custom_paint_src(node_id),
                 SpecialOp::ProcessButtonInput(node_id) => self.process_button_input(node_id),
+                SpecialOp::UnloadSubDocument(node_id) => self.remove_sub_document(node_id),
+                #[cfg(feature = "custom-widget")]
+                SpecialOp::UnloadCustomWidget(node_id) => self.remove_custom_widget(node_id),
             }
         }
 
@@ -634,6 +667,27 @@ impl<'doc> DocumentMutator<'doc> {
             let node = &mut doc.nodes[node_id];
             node.flags.set(NodeFlags::IS_IN_DOCUMENT, false);
 
+            // Clear hover state if this node was being hovered.
+            // This prevents stale hover_node_id references.
+            if doc.hover_node_id == Some(node_id) {
+                doc.hover_node_id = None;
+                doc.hover_node_is_text = false;
+            }
+
+            // Clear active state if this node was active
+            // This prevents stale active_node_id references.
+            if doc.active_node_id == Some(node_id) {
+                doc.active_node_id = None;
+            }
+
+            // Remove any snapshot for this node to prevent stale snapshot references
+            // during style invalidation.
+            if node.has_snapshot {
+                let opaque_id = style::dom::TNode::opaque(&&*node);
+                doc.snapshots.remove(&opaque_id);
+                node.has_snapshot = false;
+            }
+
             // If the node has an "id" attribute remove it from the ID map.
             if let Some(id_attr) = node.attr(local_name!("id")) {
                 doc.nodes_to_id.remove(id_attr);
@@ -644,7 +698,15 @@ impl<'doc> DocumentMutator<'doc> {
             };
 
             match &element.special_data {
-                SpecialElementData::SubDocument(_) => {}
+                SpecialElementData::SubDocument(_) => {
+                    self.eager_op_queue
+                        .push(SpecialOp::UnloadSubDocument(node_id));
+                }
+                #[cfg(feature = "custom-widget")]
+                SpecialElementData::CustomWidget(_) => {
+                    self.eager_op_queue
+                        .push(SpecialOp::UnloadCustomWidget(node_id));
+                }
                 SpecialElementData::Stylesheet(_) => self
                     .eager_op_queue
                     .push(SpecialOp::UnloadStylesheet(node_id)),
@@ -689,6 +751,16 @@ impl<'doc> DocumentMutator<'doc> {
     fn load_linked_stylesheet(&mut self, target_id: usize) {
         let node = &self.doc.nodes[target_id];
 
+        let mut is_in_head = false;
+        let mut parent_id = node.parent;
+        while let Some(id) = parent_id
+            && !is_in_head
+        {
+            let parent = &self.doc.nodes[id];
+            is_in_head |= parent.data.is_element_with_tag_name(&local_name!("head"));
+            parent_id = parent.parent;
+        }
+
         let rel_attr = node.attr(local_name!("rel"));
         let href_attr = node.attr(local_name!("href"));
 
@@ -700,20 +772,29 @@ impl<'doc> DocumentMutator<'doc> {
         }
 
         let url = self.doc.resolve_url(href);
+        let handler = ResourceHandler::new(
+            self.doc.tx.clone(),
+            self.doc.id(),
+            Some(node.id),
+            self.doc.shell_provider.clone(),
+            StylesheetHandler {
+                source_url: url.clone(),
+                guard: self.doc.guard.clone(),
+                net_provider: self.doc.net_provider.clone(),
+                abort_signal: self.doc.abort_signal.clone(),
+            },
+        );
+
+        if is_in_head {
+            self.doc
+                .pending_critical_resources
+                .insert(handler.request_id());
+        }
+
         self.doc.net_provider.fetch(
             self.doc.id(),
-            Request::get(url.clone()),
-            ResourceHandler::boxed(
-                self.doc.tx.clone(),
-                self.doc.id(),
-                Some(node.id),
-                self.doc.shell_provider.clone(),
-                StylesheetHandler {
-                    source_url: url,
-                    guard: self.doc.guard.clone(),
-                    net_provider: self.doc.net_provider.clone(),
-                },
-            ),
+            self.doc.build_request(url),
+            Box::new(handler),
         );
     }
 
@@ -771,7 +852,7 @@ impl<'doc> DocumentMutator<'doc> {
 
                 self.doc.net_provider.fetch(
                     self.doc.id(),
-                    Request::get(src),
+                    self.doc.build_request(src),
                     ResourceHandler::boxed(
                         self.doc.tx.clone(),
                         self.doc.id(),
@@ -894,8 +975,11 @@ impl Drop for ViewportMut<'_> {
             return;
         }
 
-        self.doc
-            .set_stylist_device(make_device(&self.doc.viewport, self.doc.font_ctx.clone()));
+        self.doc.set_stylist_device(make_device(
+            &self.doc.viewport,
+            self.doc.media_type.clone(),
+            self.doc.font_ctx.clone(),
+        ));
         self.doc.scroll_viewport_by(0.0, 0.0); // Clamp scroll offset
 
         let scale_has_changed =
@@ -909,9 +993,37 @@ impl Drop for ViewportMut<'_> {
 
 #[cfg(test)]
 mod test {
+    use style::media_queries::MediaType;
     use style_dom::ElementState;
 
     use crate::{Attribute, BaseDocument, DocumentConfig, ElementData, NodeData, qual_name};
+
+    #[test]
+    fn media_type_defaults_to_screen() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        assert_eq!(*document.media_type(), MediaType::screen());
+        assert_eq!(document.stylist_device().media_type(), MediaType::screen());
+    }
+
+    #[test]
+    fn media_type_honors_config() {
+        let mut document = BaseDocument::new(DocumentConfig {
+            media_type: Some(MediaType::print()),
+            ..Default::default()
+        });
+        assert_eq!(*document.media_type(), MediaType::print());
+        assert_eq!(document.stylist_device().media_type(), MediaType::print());
+    }
+
+    #[test]
+    fn set_media_type_updates_stylist_device() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        assert_eq!(document.stylist_device().media_type(), MediaType::screen());
+
+        document.set_media_type(MediaType::print());
+        assert_eq!(*document.media_type(), MediaType::print());
+        assert_eq!(document.stylist_device().media_type(), MediaType::print());
+    }
 
     #[test]
     fn mutator_remove_disabled() {
