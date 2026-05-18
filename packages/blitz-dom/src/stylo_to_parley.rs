@@ -40,7 +40,6 @@ pub(crate) fn generic_font_family(input: stylo::GenericFontFamily) -> parley::Ge
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn query_font_family(input: &stylo::SingleFontFamily) -> parley::QueryFamily<'_> {
     match input {
         stylo::SingleFontFamily::FamilyName(name) => {
@@ -125,6 +124,11 @@ pub(crate) fn style(
         .resolve(Length::new(font_size))
         .px();
 
+    let word_spacing = itext_styles
+        .word_spacing
+        .resolve(Length::new(font_size))
+        .px();
+
     // Convert Bold/Italic
     let font_weight = self::font_weight(font_styles.font_weight);
     let font_style = self::font_style(font_styles.font_style);
@@ -192,7 +196,7 @@ pub(crate) fn style(
         font_features: parley::FontFeatures::List(Cow::Borrowed(&[])),
         locale: Default::default(),
         line_height,
-        word_spacing: Default::default(),
+        word_spacing,
         letter_spacing,
         text_wrap_mode,
         overflow_wrap,

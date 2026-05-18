@@ -23,7 +23,7 @@ use style::{
 #[cfg(feature = "tracing")]
 use tracing::warn;
 
-impl ElementCx<'_> {
+impl ElementCx<'_, '_> {
     pub(super) fn draw_background(&self, scene: &mut impl PaintScene) {
         use GenericImage::*;
         use StyloBackgroundClip::*;
@@ -173,8 +173,8 @@ impl ElementCx<'_> {
             BackgroundSizeComputeMode::Size(svg_size.width(), svg_size.height()),
         );
 
-        let x_ratio = (bg_size.width as f64 / svg_size.width() as f64) * self.scale;
-        let y_ratio = (bg_size.height as f64 / svg_size.height() as f64) * self.scale;
+        let x_ratio = (bg_size.width / svg_size.width() as f64) * self.scale;
+        let y_ratio = (bg_size.height / svg_size.height() as f64) * self.scale;
 
         let bg_pos = compute_background_position(
             bg_styles,

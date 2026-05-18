@@ -1,5 +1,5 @@
 use color::{OpaqueColor, Srgb};
-use demo_renderer::{DemoMessage, DemoPaintSource};
+use demo_renderer::{DemoMessage, DemoWidget};
 use std::env;
 use wgpu::{Features, Limits};
 
@@ -14,10 +14,10 @@ use html::launch_html;
 static STYLES: &str = include_str!("./styles.css");
 
 // WGPU settings required by this example
-const FEATURES: Features = Features::PUSH_CONSTANTS;
+const FEATURES: Features = Features::IMMEDIATES;
 fn limits() -> Limits {
     Limits {
-        max_push_constant_size: 16,
+        max_immediate_size: 16,
         ..Limits::default()
     }
 }
