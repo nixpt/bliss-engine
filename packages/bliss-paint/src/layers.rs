@@ -11,7 +11,9 @@ pub(crate) struct LayerManager {
     layer_depth: Cell<u32>,
     layers_wanted: Cell<u32>,
 
-    #[allow(unused)] // Only used for debugging. Enabled as required.
+    /// Watermark: maximum `layer_depth` ever reached. Updated each time a
+    /// layer is pushed; never decremented when layers pop. Useful for
+    /// diagnosing layer-stack depth pressure.
     layer_depth_used: Cell<u32>,
 }
 
@@ -59,7 +61,8 @@ impl LayerManager {
         // Update accounting
         self.layers_used.update(|x| x + 1);
         self.layer_depth.update(|x| x + 1);
-        self.layer_depth.update(|x| x.max(self.layer_depth.get()));
+        self.layer_depth_used
+            .update(|x| x.max(self.layer_depth.get()));
 
         true
     }
