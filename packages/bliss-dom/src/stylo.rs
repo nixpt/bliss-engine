@@ -205,14 +205,14 @@ impl<'a> TShadowRoot for BlissNode<'a> {
     }
 
     fn host(&self) -> <Self::ConcreteNode as TNode>::ConcreteElement {
-        todo!("Shadow roots not implemented")
+        unimplemented!("Shadow roots are not yet implemented")
     }
 
     fn style_data<'b>(&self) -> Option<&'b style::stylist::CascadeData>
     where
         Self: 'b,
     {
-        todo!("Shadow roots not implemented")
+        unimplemented!("Shadow roots are not yet implemented")
     }
 }
 
@@ -567,7 +567,7 @@ impl<'a> TElement for BlissNode<'a> {
         // and need a reference to the Slab to convert it back into an Element
         //
         // Luckily it is only needed for shadow dom.
-        todo!();
+        None
     }
 
     fn traversal_children(&self) -> style::dom::LayoutIterator<Self::TraversalChildrenIterator> {
@@ -667,11 +667,11 @@ impl<'a> TElement for BlissNode<'a> {
     }
 
     fn store_children_to_process(&self, _n: isize) {
-        unimplemented!()
+        // Style processing not yet fully implemented
     }
 
     fn did_process_child(&self) -> isize {
-        unimplemented!()
+        0
     }
 
     unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
@@ -944,7 +944,7 @@ impl<'a> TElement for BlissNode<'a> {
     where
         F: FnMut(&AtomIdent),
     {
-        todo!()
+        // Custom state not yet implemented
     }
 
     fn has_selector_flags(&self, flags: ElementSelectorFlags) -> bool {
