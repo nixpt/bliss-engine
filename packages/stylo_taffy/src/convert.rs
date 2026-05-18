@@ -74,7 +74,9 @@ macro_rules! log_fallback {
 
 #[cfg(not(feature = "tracing"))]
 macro_rules! log_fallback {
-    ($value:expr, $to:expr) => {};
+    ($value:expr, $to:expr) => {
+        let _ = (&$value, &$to);
+    };
 }
 
 /// Converts a Stylo LengthPercentage to a Taffy LengthPercentage.
