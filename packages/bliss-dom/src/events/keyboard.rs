@@ -31,7 +31,15 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
 ) {
     if let KeyboardOrTextInputEvent::KeyPress(event) = &event {
         if event.key == Key::Tab {
-            doc.focus_next_node();
+            // Tab key - move to next focusable element
+            // Shift+Tab - move to previous focusable element
+            let shift = event.modifiers.contains(Modifiers::SHIFT);
+            if shift {
+                // TODO: Implement focus_prev_node() for reverse tab navigation
+                // For now, we'll just not do anything on Shift+Tab
+            } else {
+                doc.focus_next_node();
+            }
             return;
         }
 
