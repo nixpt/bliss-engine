@@ -22,6 +22,9 @@ use super::{Attribute, Attributes};
 use crate::Document;
 use crate::layout::table::TableContext;
 
+#[cfg(feature = "custom-widget")]
+use super::custom_widget::CustomWidgetData;
+
 macro_rules! local_names {
     ($($name:tt),+) => {
         [$(local_name!($name),)+]
@@ -85,7 +88,11 @@ pub enum SpecialElementType {
 /// Heterogeneous data that depends on the element's type.
 #[derive(Default)]
 pub enum SpecialElementData {
+    /// A sub-document such an \<iframe\> or \<web-view\> element
     SubDocument(Box<dyn Document>),
+    /// A custom widget
+    #[cfg(feature = "custom-widget")]
+    CustomWidget(CustomWidgetData),
     /// A stylesheet
     Stylesheet(DocumentStyleSheet),
     /// An \<img\> element's image data
@@ -110,6 +117,8 @@ impl Clone for SpecialElementData {
     fn clone(&self) -> Self {
         match self {
             Self::SubDocument(_) => Self::None, // TODO
+            #[cfg(feature = "custom-widget")]
+            Self::CustomWidget(_) => Self::None, // TODO
             Self::Stylesheet(data) => Self::Stylesheet(data.clone()),
             Self::Image(data) => Self::Image(data.clone()),
             Self::Canvas(data) => Self::Canvas(data.clone()),
@@ -247,6 +256,22 @@ impl ElementData {
         }
     }
 
+    #[cfg(feature = "custom-widget")]
+    pub fn custom_widget_data(&self) -> Option<&CustomWidgetData> {
+        match &self.special_data {
+            SpecialElementData::CustomWidget(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "custom-widget")]
+    pub fn custom_widget_data_mut(&mut self) -> Option<&mut CustomWidgetData> {
+        match &mut self.special_data {
+            SpecialElementData::CustomWidget(data) => Some(data),
+            _ => None,
+        }
+    }
+
     pub fn checkbox_input_checked(&self) -> Option<bool> {
         match self.special_data {
             SpecialElementData::CheckboxInput(checked) => Some(checked),
@@ -328,7 +353,7 @@ impl ElementData {
         value: &str,
         guard: &SharedRwLock,
         url_extra_data: UrlExtraData,
-    ) {
+    ) -> bool {
         let context = ParserContext::new(
             Origin::Author,
             &url_extra_data,
@@ -338,11 +363,13 @@ impl ElementData {
             /* namespaces = */ Default::default(),
             None,
             None,
+            /* attr_taint = */ Default::default(),
         );
 
         let Ok(property_id) = PropertyId::parse(name, &context) else {
-            eprintln!("Warning: unsupported property {name}");
-            return;
+            #[cfg(feature = "tracing")]
+            tracing::warn!(property = name, "Unsupported property");
+            return false;
         };
         let mut source_property_declaration = SourcePropertyDeclaration::default();
         let mut input = ParserInput::new(value);
@@ -353,8 +380,9 @@ impl ElementData {
             &context,
             &mut parser,
         ) else {
-            eprintln!("Warning: invalid property value for {name}: {value}");
-            return;
+            #[cfg(feature = "tracing")]
+            tracing::warn!(property = name, value, "Invalid property value");
+            return false;
         };
 
         if self.style_attribute.is_none() {
@@ -365,6 +393,8 @@ impl ElementData {
             .unwrap()
             .write_with(&mut guard.write())
             .extend(source_property_declaration.drain(), Importance::Normal);
+
+        true
     }
 
     pub fn remove_style_property(
@@ -372,7 +402,7 @@ impl ElementData {
         name: &str,
         guard: &SharedRwLock,
         url_extra_data: UrlExtraData,
-    ) {
+    ) -> bool {
         let context = ParserContext::new(
             Origin::Author,
             &url_extra_data,
@@ -382,10 +412,12 @@ impl ElementData {
             /* namespaces = */ Default::default(),
             None,
             None,
+            /* attr_taint = */ Default::default(),
         );
         let Ok(property_id) = PropertyId::parse(name, &context) else {
-            eprintln!("Warning: unsupported property {name}");
-            return;
+            #[cfg(feature = "tracing")]
+            tracing::warn!(property = name, "Unsupported property");
+            return false;
         };
 
         if let Some(style) = &mut self.style_attribute {
@@ -393,8 +425,11 @@ impl ElementData {
             let style = style.write_with(&mut guard);
             if let Some(index) = style.first_declaration_to_remove(&property_id) {
                 style.remove_property(&property_id, index);
+                return true;
             }
         }
+
+        false
     }
 
     pub fn set_sub_document(&mut self, sub_document: Box<dyn Document>) {
@@ -403,6 +438,22 @@ impl ElementData {
 
     pub fn remove_sub_document(&mut self) {
         self.special_data = SpecialElementData::None;
+    }
+
+    #[cfg(feature = "custom-widget")]
+    pub fn set_custom_widget(&mut self, widget: Box<dyn crate::Widget>) {
+        use crate::node::custom_widget::CustomWidgetData;
+        self.special_data = SpecialElementData::CustomWidget(CustomWidgetData::new(widget));
+    }
+
+    #[cfg(feature = "custom-widget")]
+    pub fn remove_custom_widget(&mut self) -> Vec<anyrender::ResourceId> {
+        let resource_ids = self
+            .custom_widget_data_mut()
+            .map(|widget_data| widget_data.take_resource_ids())
+            .unwrap_or_default();
+        self.special_data = SpecialElementData::None;
+        resource_ids
     }
 
     pub fn take_inline_layout(&mut self) -> Option<Box<TextLayout>> {
@@ -527,6 +578,8 @@ impl std::fmt::Debug for SpecialElementData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SpecialElementData::SubDocument(_) => f.write_str("NodeSpecificData::SubDocument"),
+            #[cfg(feature = "custom-widget")]
+            SpecialElementData::CustomWidget(_) => f.write_str("NodeSpecificData::CustomWidget"),
             SpecialElementData::Stylesheet(_) => f.write_str("NodeSpecificData::Stylesheet"),
             SpecialElementData::Image(data) => match **data {
                 ImageData::Raster(_) => f.write_str("NodeSpecificData::Image(Raster)"),

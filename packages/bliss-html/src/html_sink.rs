@@ -145,8 +145,9 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
         Self: 'a;
 
     fn finish(self) -> Self::Output {
+        #[cfg(feature = "tracing")]
         for error in self.errors.borrow().iter() {
-            println!("ERROR: {error}");
+            tracing::error!("{error}");
         }
     }
 
@@ -273,10 +274,6 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
     fn reparent_children(&self, old_parent_id: &Self::Handle, new_parent_id: &Self::Handle) {
         self.mutr()
             .reparent_children(*old_parent_id, *new_parent_id);
-    }
-
-    fn clone_subtree(&self, target: &Self::Handle) -> Self::Handle {
-        self.mutr().deep_clone_node(*target)
     }
 }
 

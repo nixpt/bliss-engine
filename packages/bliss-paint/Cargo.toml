@@ -2,7 +2,7 @@
 name = "bliss-paint"
 description = "Paint a Bliss Document using anyrender"
 documentation = "https://docs.rs/bliss-paint"
-version = "0.2.99"
+version.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -14,6 +14,9 @@ rust-version.workspace = true
 default = ["svg"]
 tracing = ["dep:tracing"]
 svg = ["dep:anyrender_svg", "dep:usvg", "bliss-dom/svg"]
+custom-widget = ["bliss-dom/custom-widget"]
+font-embolden = []
+apple-font-embolden = []
 
 [dependencies]
 # Bliss dependencies
