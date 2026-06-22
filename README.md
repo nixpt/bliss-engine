@@ -86,6 +86,101 @@ Bliss is comprised of granular, modular crates that can be combined or replaced:
 
 ---
 
+## Boundary Doctrine
+
+Bliss is the **HTML/CSS/DOM rendering engine for the Exosphere ecosystem**.
+It parses HTML, resolves CSS through Stylo, lays out with Taffy, shapes text
+with Parley, paints to a `vello::Scene`, and **hands the rendered scene off to
+[`nixpt/mustang`](https://github.com/nixpt/mustang) for GPU compositing,
+effects, and WGPU submission**. Everything else in the rendering pipeline is
+owned by a sibling project. This is the architectural settlement from s305
+([`25f898c`](https://github.com/nixpt/arniko/commit/25f898c) on
+`nixpt/arniko`); it is not open for casual redrawing and is the **reciprocal**
+mirror of [`nixpt/mustang`'s `## Boundary Doctrine`](https://github.com/nixpt/mustang#boundary-doctrine).
+
+### What bliss-engine IS
+
+- **HTML parsing.** `bliss-html` (forked from Dioxus' Blitz), `html5ever` +
+  `markup5ever`-class pipelines.
+- **CSS resolution.** Cascade + computed style + animations via upstream
+  **Stylo** (the Servo CSS engine). Includes the `selectors` + `cssparser`
+  ergonomic APIs.
+- **Layout.** Flexbox + Grid + block layout via **Taffy** (the same
+  layout-graph crate used by `nixpt/arniko`).
+- **Text shaping.** Glyph atlas + font loading via **Parley** + `peniko`'s
+  font subsystem.
+- **Painting (Scene construction).** Builds a flat `vello::Scene` after
+  layout + shaping — but does **NOT** submit to WGPU itself. The scene is
+  contractually consumed by `mustang`.
+- **Browser content rendering.** Designed for `surfer` (the Exosphere
+  browser) to render web pages.
+- **Polyglot scripting (beyond JS).** The `ScriptEngine` trait lets any
+  Exosphere language (Crush, Python, Lua, …) drive DOM mutation without V8 /
+  JavaScript lock-in.
+- **Capability-gated rendering.** XIP-bound `bliss-dom` segments so security
+  policies gate per-region access.- **DOM lifecycle via `bliss-dom`'s command-driven update loop.** DOM nodes are produced and updated through events / `ScriptEngine` actions; the boundary between *what changes* and *what reacts to changes* lives in the calling component (surfer / arniko), not in bliss-engine.
+
+### What bliss-engine IS NOT — the reciprocal boundaries
+
+- **No GPU compositor + effects.** [nixpt/mustang](https://github.com/nixpt/mustang)
+  is the only repo that takes a final `vello::Scene` and submits it to WGPU
+  (effects, blur / transform / color, region scheduling, native-vs-deferred).
+  Bliss builds the scene; mustang composites it. Pulling `Effect::*`,
+  `MustangCompositor`, or WGPU submission into bliss would defy the
+  boundary s305 settled. The final `Scene` crosses the wire to mustang via
+  the painter adapter — no direct WGPU access here.
+- **No reactive component primitives.** `nixpt/arniko` is the only repo
+  that defines `Signal` / `Computed` / `View` / `For` / `Switch`,
+  fn-component reactivity, capsule-OS UI patterns. Bliss does **not**
+  mutate DOM through reactive primitives — DOM mutations are
+  command-driven through the `ScriptEngine` trait or `bliss-shell`-level
+  event plumbing only.
+- **No capsule-OS UI surface.** `nixpt/arniko` is the only repo that
+  renders OS-level chrome (tabs, omnibar, status bar, dialogs, OS
+  notifications, capsule surfaces). Bliss is browser-content-only. If a
+  surface is OS-level, route it through arniko.- **No capsule-OS networking.** `nixpt/arniko` (via the s305-extracted `exo-bliss-net` crate *— published at `v0.2.99` on crates.io per s333*) handles capsule-OS networking primitives (capsule-id binding, exo-mesh transport, Mycelium Mesh). Bliss handles *browser content* protocols (`http://`, `file://`, `exo://`); the two are distinct — don't promote browser-protocol code into capsule-OS primitives.
+
+### How to apply (contributor guidance)
+
+When adding features to bliss-engine, do **NOT** cross the boundaries above:
+
+- Don't add a `MustangCompositor` wrapper, `Effect::blur` invocations, or
+  WGPU submission. → If you need effects, define the effects in the scene
+  description and pass to mustang via the painter adapter.
+- Don't add `Signal` / `Computed` / `View` macros. → If you need reactive
+  DOM, the caller (arniko, surfer) should drive it externally; bliss stays
+  command-driven.
+- Don't add OS-UI surface types (window chrome, dialog primitives,
+  menubar). → Route to arniko.
+- Don't add capsule networking primitives (capsule-id binding, exo-mesh
+  transport). → Route to arniko via `exo-bliss-net`.
+
+### Where features belong when the reciprocal test says "no"
+
+- **GPU compositing / effects** (the compositor pipeline, regions,
+  WGPU submission): → [nixpt/mustang](https://github.com/nixpt/mustang)
+  (`arniko-mustang v0.2.99` on crates.io).
+- **Reactive UI / capsule OS / OS-level surfaces / capsule networking**:
+  → [nixpt/arniko](https://github.com/nixpt/arniko) (`arniko`
+  monorepo, includes `exo-bliss-net`).
+- **HTML/CSS/DOM for browser content** (this repo): → bliss-engine.
+
+### See also
+
+- Reciprocal from mustang's side:
+  [`nixpt/mustang`'s `## Boundary Doctrine`](https://github.com/nixpt/mustang#boundary-doctrine) —
+  the *"what mustang IS NOT"* mirror; the two sides tell the boundary
+  story from each perspective.
+- Architecture memory: the canonical s305 doctrine lives in
+  `workspace-meta/foreman-memory/arniko-mustang-bliss-surfer-architecture.md`
+  (workspace level); `nixpt/mustang`'s README `## Boundary Doctrine`
+  cross-links the synced copy under `docs/architecture/` of that repo.
+- Origin commit: [`25f898c`](https://github.com/nixpt/arniko/commit/25f898c) —
+  *"extract mustang → standalone `nixpt/mustang` project"* on
+  `nixpt/arniko`. The s305 settlement that named bliss-engine's role.
+
+---
+
 ## 🌉 Relationship to Upstream
 
 We maintain a "Hard Fork" for architectural divergence while tracking generic improvements:
