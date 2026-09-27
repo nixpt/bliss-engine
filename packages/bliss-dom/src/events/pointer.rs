@@ -1,17 +1,17 @@
-use std::collections::VecDeque;
-
-use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use bliss_traits::{
     events::{
-        BlissInputEvent, BlissPointerEvent, BlissPointerId, BlissWheelDelta, BlissWheelEvent,
-        DomEvent, DomEventData, MouseEventButton, MouseEventButtons,
+        BlissInputEvent, BlissPointerEvent, BlissPointerId, BlissSubmitEvent, BlissWheelDelta,
+        BlissWheelEvent, DomEvent, DomEventData, MouseEventButton, MouseEventButtons,
     },
     navigation::NavigationOptions,
 };
 use keyboard_types::Modifiers;
 use markup5ever::local_name;
-use style::values::computed::UserSelect;
 
 use crate::{BaseDocument, node::SpecialElementData};
 
@@ -76,8 +76,16 @@ impl PanState {
             dy: dy as f32,
         });
 
-        // Remove samples older than 100ms
-        if self.samples.len() > 50 && time_ms - self.samples.front().unwrap().time > 100 {
+        // Remove samples older than 100ms.
+        // Use `map(...).unwrap_or(time_ms)` so an empty front (after the inner
+        // partition drain) yields `time_ms - time_ms = 0 <= 100`, short-circuiting
+        // the partition/pop dance instead of panicking on an empty deque.
+        let front_time = self
+            .samples
+            .front()
+            .map(|s| s.time)
+            .unwrap_or(time_ms);
+        if self.samples.len() > 50 && time_ms - front_time > 100 {
             let idx = self
                 .samples
                 .partition_point(|sample| time_ms - sample.time > 100);
@@ -157,27 +165,7 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
         if dx.abs() > 2.0 || dy.abs() > 2.0 {
             match event.id {
                 BlissPointerId::Mouse | BlissPointerId::Pen => {
-                    if let Some(mousedown_node_id) = doc.mousedown_node_id {
-                        let node = &doc.nodes[mousedown_node_id];
-                        if let Some(style) = node.primary_styles() {
-                            let user_select = style.clone_user_select();
-                            if user_select == UserSelect::None {
-                                // Do nothing. Continue with rest of function
-                            } else if user_select == UserSelect::Auto {
-                                if let Some(parent) = node.parent {
-                                    let node = &doc.nodes[parent];
-                                    if let Some(style) = node.primary_styles() {
-                                        let user_select = style.clone_user_select();
-                                        if user_select == UserSelect::None {
-                                            // Do nothing. Continue with rest of function
-                                        } else {
-                                            doc.drag_mode = DragMode::Selecting;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    doc.drag_mode = DragMode::Selecting;
                 }
                 BlissPointerId::Finger(_) => {
                     doc.drag_mode = DragMode::Panning(PanState {
@@ -192,10 +180,9 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
     }
 
     if let DragMode::Panning(state) = &mut doc.drag_mode {
-        let time_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH);
+        debug_assert!(now_since_epoch.is_ok(), "SystemTime before UNIX_EPOCH");
+        let time_ms = now_since_epoch.unwrap_or_default().as_millis() as u64;
 
         let target = state.target;
         let (dx, dy) = state.update(time_ms, event.screen_x(), event.screen_y());
@@ -222,10 +209,7 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
     let node = &mut doc.nodes[target];
     let Some(el) = node.data.downcast_element_mut() else {
         // Handle text selection extension for non-element nodes
-        if buttons != MouseEventButtons::None
-            && doc.drag_mode == DragMode::Selecting
-            && doc.extend_text_selection_to_point(x, y)
-        {
+        if buttons != MouseEventButtons::None && doc.extend_text_selection_to_point(x, y) {
             changed = true;
         }
         return changed;
@@ -246,26 +230,25 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
             y: node.final_layout.padding.top + node.final_layout.border.top,
         };
         if !text_input_data.is_multiline {
-            let layout = text_input_data.editor.try_layout().unwrap();
-            let content_box_height = node.final_layout.content_box_height();
-            let input_height = layout.height() / layout.scale();
-            let y_offset = ((content_box_height - input_height) / 2.0).max(0.0);
+            if let Some(layout) = text_input_data.editor.try_layout() {
+                let content_box_height = node.final_layout.content_box_height();
+                let input_height = layout.height() / layout.scale();
+                let y_offset = ((content_box_height - input_height) / 2.0).max(0.0);
 
-            content_box_offset.y += y_offset;
+                content_box_offset.y += y_offset;
+            }
         }
-
         let x = (hit.x - content_box_offset.x) as f64 * doc.viewport.scale_f64();
         let y = (hit.y - content_box_offset.y) as f64 * doc.viewport.scale_f64();
 
         text_input_data
             .editor
-            .driver(&mut doc.font_ctx.lock().unwrap(), &mut doc.layout_ctx)
+            .driver(&mut doc.font_ctx.lock().unwrap_or_else(|e| e.into_inner()), &mut doc.layout_ctx)
             .extend_selection_to_point(x as f32, y as f32);
 
         changed = true;
     } else if event.is_mouse()
         && buttons != MouseEventButtons::None
-        && doc.drag_mode == DragMode::Selecting
         && doc.extend_text_selection_to_point(x, y)
     {
         changed = true;
@@ -334,11 +317,12 @@ pub(crate) fn handle_pointerdown(
                         y: node.final_layout.padding.top + node.final_layout.border.top,
                     };
                     if !text_input_data.is_multiline {
-                        let layout = text_input_data.editor.try_layout().unwrap();
-                        let content_box_height = node.final_layout.content_box_height();
-                        let input_height = layout.height() / layout.scale();
-                        let y_offset = ((content_box_height - input_height) / 2.0).max(0.0);
-                        content_box_offset.y += y_offset;
+                        if let Some(layout) = text_input_data.editor.try_layout() {
+                            let content_box_height = node.final_layout.content_box_height();
+                            let input_height = layout.height() / layout.scale();
+                            let y_offset = ((content_box_height - input_height) / 2.0).max(0.0);
+                            content_box_offset.y += y_offset;
+                        }
                     }
                     ClickTarget::TextInput { content_box_offset }
                 } else {
@@ -367,29 +351,43 @@ pub(crate) fn handle_pointerdown(
             let tx = (hit.x - content_box_offset.x) as f64 * doc.viewport.scale_f64();
             let ty = (hit.y - content_box_offset.y) as f64 * doc.viewport.scale_f64();
 
-            // Now get mutable access to the text input
+            // Now get mutable access to the text input.
+            // If the node is no longer an element (e.g. it was mutated into a
+            // text or comment node between the hit-test and the action), bail
+            // out — this is the genuine D-3 panic surface on attacker
+            // HTML/CSS.
             let click_count = doc.click_count;
-            let node = &mut doc.nodes[actual_target];
-            let el = node.data.downcast_element_mut().unwrap();
+            let Some(el) = doc
+                .nodes
+                .get_mut(actual_target)
+                .and_then(|node| node.data.downcast_element_mut())
+            else {
+                return;
+            };
             if let SpecialElementData::TextInput(ref mut text_input_data) = el.special_data {
-                let mut font_ctx = doc.font_ctx.lock().unwrap();
-                let mut driver = text_input_data
-                    .editor
-                    .driver(&mut font_ctx, &mut doc.layout_ctx);
+                // Scope-block so the parking_lot `MutexGuard` for `font_ctx`
+                // is released before `generate_focus_events` is invoked below.
+                // Avoids `drop(guard)` (which trips the `dropping_references`
+                // lint when the guard wraps a reference-typed `FontContext`).
+                {
+                    let mut font_ctx =
+                        doc.font_ctx.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut driver = text_input_data
+                        .editor
+                        .driver(&mut font_ctx, &mut doc.layout_ctx);
 
-                match click_count {
-                    1 => {
-                        if mods.shift() {
-                            driver.shift_click_extension(tx as f32, ty as f32);
-                        } else {
-                            driver.move_to_point(tx as f32, ty as f32);
+                    match click_count {
+                        1 => {
+                            if mods.shift() {
+                                driver.shift_click_extension(tx as f32, ty as f32);
+                            } else {
+                                driver.move_to_point(tx as f32, ty as f32);
+                            }
                         }
+                        2 => driver.select_word_at_point(tx as f32, ty as f32),
+                        _ => driver.select_hard_line_at_point(tx as f32, ty as f32),
                     }
-                    2 => driver.select_word_at_point(tx as f32, ty as f32),
-                    _ => driver.select_hard_line_at_point(tx as f32, ty as f32),
                 }
-
-                drop(font_ctx);
             }
 
             generate_focus_events(
@@ -410,10 +408,12 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     mut dispatch_event: F,
 ) {
     if doc.devtools().highlight_hover {
-        let mut node = doc.get_node(target).unwrap();
+        let Some(mut node) = doc.get_node(target) else {
+            return;
+        };
         if event.button == MouseEventButton::Secondary {
             if let Some(parent_id) = node.layout_parent.get() {
-                node = doc.get_node(parent_id).unwrap();
+                node = doc.get_node(parent_id).unwrap_or(node);
             }
         }
         doc.debug_log_node(node.id);
@@ -429,10 +429,9 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     // the document with a touch
     let do_click = drag_mode == DragMode::None;
 
-    let time_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
+    let now_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH);
+    debug_assert!(now_since_epoch.is_ok(), "SystemTime before UNIX_EPOCH");
+    let time_ms = now_since_epoch.unwrap_or_default().as_millis() as u64;
 
     if let DragMode::Panning(state) = &drag_mode {
         if let Some(fling) = state.generate_fling(time_ms) {
@@ -503,23 +502,25 @@ pub(crate) fn handle_click(
                     break 'matched true;
                 }
                 local_name!("input") if el.attr(local_name!("type")) == Some("radio") => {
-                    let radio_set = el.attr(local_name!("name")).unwrap().to_string();
-                    BaseDocument::toggle_radio(doc, radio_set, node_id);
+                    let radio_set = el.attr(local_name!("name")).map(|s| s.to_string());
+                    if let Some(radio_set) = radio_set {
+                        BaseDocument::toggle_radio(doc, radio_set, node_id);
 
-                    // TODO: make input event conditional on value actually changing
-                    let value = String::from("true");
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Input(BlissInputEvent { value }),
-                    ));
+                        // TODO: make input event conditional on value actually changing
+                        let value = String::from("true");
+                        dispatch_event(DomEvent::new(
+                            node_id,
+                            DomEventData::Input(BlissInputEvent { value }),
+                        ));
 
-                    generate_focus_events(
-                        doc,
-                        &mut |doc| {
-                            doc.set_focus_to(node_id);
-                        },
-                        dispatch_event,
-                    );
+                        generate_focus_events(
+                            doc,
+                            &mut |doc| {
+                                doc.set_focus_to(node_id);
+                            },
+                            dispatch_event,
+                        );
+                    }
 
                     break 'matched true;
                 }
@@ -529,10 +530,15 @@ pub(crate) fn handle_click(
                         doc.label_bound_input_element(node_id).map(|n| n.id)
                     {
                         // Apply default click event action for target node
-                        let target_node = doc.get_node_mut(target_node_id).unwrap();
-                        let syn_event = target_node.synthetic_click_event_data(event.mods);
-                        handle_click(doc, target_node_id, &syn_event, dispatch_event);
-                        break 'matched true;
+                        if let Some(target_node) = doc.get_node_mut(target_node_id) {
+                            let syn_event = target_node.synthetic_click_event_data(event.mods);
+                            // No explicit `drop(target_node)` — the `&mut Node`
+                            // borrow ends at the end of this `if let` arm, which
+                            // is exactly where we want it released (before the
+                            // recursive `handle_click` borrow of `doc`).
+                            handle_click(doc, target_node_id, &syn_event, dispatch_event);
+                            break 'matched true;
+                        }
                     }
                 }
                 local_name!("a") => {
@@ -540,24 +546,30 @@ pub(crate) fn handle_click(
                         if let Some(url) = doc.url.resolve_relative(href) {
                             doc.navigation_provider.navigate_to(NavigationOptions::new(
                                 url,
-                                None,
+                                String::from("text/plain"),
                                 doc.id(),
                             ));
                         } else {
-                            #[cfg(feature = "tracing")]
-                            tracing::warn!("{href} is not parseable as a url. : {:?}", *doc.url);
+                            println!("{href} is not parseable as a url. : {:?}", *doc.url)
                         }
                         break 'matched true;
                     } else {
-                        #[cfg(feature = "tracing")]
-                        tracing::info!("Clicked link without href: {:?}", el.attrs());
+                        println!("Clicked link without href: {:?}", el.attrs());
                     }
                 }
-                local_name!("input") | local_name!("button")
+                local_name!("input")
                     if el.is_submit_button() || el.attr(local_name!("type")) == Some("submit") =>
                 {
-                    if let Some(form_owner) = doc.controls_to_form.get(&node_id) {
-                        doc.submit_form(*form_owner, node_id);
+                    // Dispatch submit event. The actual form submission happens in the
+                    // default action (mod.rs) AFTER scripts have had a chance to
+                    // process the event and potentially call preventDefault().
+                    if let Some(&form_owner) = doc.controls_to_form.get(&node_id) {
+                        dispatch_event(DomEvent::new(
+                            form_owner,
+                            DomEventData::Submit(BlissSubmitEvent {
+                                submitter_id: node_id,
+                            }),
+                        ));
                     }
                 }
                 #[cfg(feature = "file_input")]
@@ -575,8 +587,7 @@ pub(crate) fn handle_click(
                         0 => "No Files Selected".to_string(),
                         1 => files
                             .first()
-                            .unwrap()
-                            .file_name()
+                            .and_then(|f| f.file_name())
                             .unwrap_or_default()
                             .to_string_lossy()
                             .to_string(),
@@ -588,12 +599,16 @@ pub(crate) fn handle_click(
                     } else {
                         el.special_data = SpecialElementData::FileInput(files.into())
                     }
-                    let child_label_id = doc.nodes[node_id].children[1];
-                    let child_text_id = doc.nodes[child_label_id].children[0];
-                    let text_data = doc.nodes[child_text_id]
-                        .text_data_mut()
-                        .expect("Text data not found");
-                    text_data.content = text_content;
+
+                    // Update file input label text (safe access pattern)
+                    if let (Some(&child_label_id), Some(&child_text_id)) = (
+                        doc.nodes[node_id].children.get(1),
+                        doc.nodes[node_id].children.get(1).and_then(|&clid| doc.nodes[clid].children.first()),
+                    ) {
+                        if let Some(text_data) = doc.nodes[child_text_id].text_data_mut() {
+                            text_data.content = text_content;
+                        }
+                    }
                 }
                 _ => {}
             }

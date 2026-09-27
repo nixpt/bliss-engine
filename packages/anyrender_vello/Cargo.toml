@@ -1,0 +1,39 @@
+[package]
+name = "bliss-anyrender-vello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+description = "Vello backend for anyrender, forked for Bliss (SceneOverlay/set_scene_effects mustang hooks — see window_renderer.rs)"
+documentation = "https://docs.rs/bliss-anyrender-vello"
+readme = "README.md"
+
+[lib]
+name = "anyrender_vello"
+path = "src/lib.rs"
+
+[features]
+log_frame_times = ["debug_timer/enable"]
+
+[dependencies]
+anyrender = { workspace = true }
+debug_timer = { workspace = true }
+kurbo = { workspace = true }
+peniko = { workspace = true }
+pollster = { workspace = true }
+rustc-hash = { workspace = true }
+vello = { workspace = true }
+wgpu = { workspace = true }
+wgpu_context = { workspace = true }
+
+# SHELL-SPLIT-0-1: dev-only, for examples/overlay_coexistence.rs (proves
+# SceneOverlay + TextureOverlay coexist in one render() call). Not a runtime
+# dependency of the library itself.
+[dev-dependencies]
+winit = { workspace = true }
+
+[[example]]
+name = "overlay_coexistence"

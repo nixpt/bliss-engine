@@ -1,5 +1,10 @@
-use parley::{AlignmentOptions, IndentOptions};
-use style::values::{computed::CSSPixelLength, generics::text::GenericTextIndent};
+// D-9 cast audit: all `id as usize` casts here convert Parley/Taffy node IDs
+// (usize or u32) to usize for slab indexing.  On 64-bit targets this is
+// lossless; on 32-bit targets node counts are always < 2^32 so no truncation.
+// Float-domain casts (as f32 / as f64) are inherent to layout coordinate math
+// and cannot overflow in any meaningful sense.  No saturating_ / checked_
+// wrappers are needed for these patterns.
+use parley::AlignmentOptions;
 use taffy::{
     AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CollapsibleMarginSet,
     CoreStyle as _, LayoutInput, LayoutOutput, LayoutPartialTree as _, MaybeMath as _,
@@ -142,12 +147,12 @@ impl BaseDocument {
         } = inputs;
 
         // Take inline layout to satisfy borrow checker
-        let mut inline_layout = self.nodes[node_id]
-            .data
-            .downcast_element_mut()
-            .unwrap()
-            .take_inline_layout()
-            .unwrap();
+        let Some(elem) = self.nodes[node_id].data.downcast_element_mut() else {
+            return LayoutOutput::from_outer_size(Size::ZERO);
+        };
+        let Some(mut inline_layout) = elem.take_inline_layout() else {
+            return LayoutOutput::from_outer_size(Size::ZERO);
+        };
 
         let style = &self.nodes[node_id].style;
 
@@ -177,9 +182,20 @@ impl BaseDocument {
             Overflow::Scroll => style.scrollbar_width(),
             _ => 0.0,
         });
-        // TODO: make side configurable based on the `direction` property
+        // Scrollbar gutter is placed on the end side (right for LTR, left for RTL)
+        let is_rtl = self.nodes[node_id]
+            .primary_styles()
+            .map(|s| {
+                use style::properties::longhands::direction::computed_value::T as Direction;
+                matches!(s.clone_direction(), Direction::Rtl)
+            })
+            .unwrap_or(false);
         let mut content_box_inset = container_pb;
-        content_box_inset.right += scrollbar_gutter.x;
+        if is_rtl {
+            content_box_inset.left += scrollbar_gutter.x;
+        } else {
+            content_box_inset.right += scrollbar_gutter.x;
+        }
         content_box_inset.bottom += scrollbar_gutter.y;
 
         let has_styles_preventing_being_collapsed_through = !style.is_block()
@@ -201,11 +217,9 @@ impl BaseDocument {
             && inline_layout.layout.inline_boxes().is_empty()
         {
             // Put layout back
-            self.nodes[node_id]
-                .data
-                .downcast_element_mut()
-                .unwrap()
-                .inline_layout_data = Some(inline_layout);
+            if let Some(elem) = self.nodes[node_id].data.downcast_element_mut() {
+                elem.inline_layout_data = Some(inline_layout);
+            }
             return LayoutOutput::from_outer_size(
                 Size::ZERO.maybe_max(container_pb.sum_axes().map(Some)),
             );
@@ -283,7 +297,6 @@ impl BaseDocument {
             ..child_inputs
         };
 
-        // Update inline boxes
         for ibox in inline_layout.layout.inline_boxes_mut() {
             let style = &self.nodes[ibox.id as usize].style;
             let margin = style
@@ -305,37 +318,21 @@ impl BaseDocument {
             }
         }
 
-        // TODO: Resolve against style widths as well as known dimensions
-        let text_indent = self.nodes[node_id]
-            .primary_styles()
-            .map(|s| s.clone_text_indent())
-            .unwrap_or_else(GenericTextIndent::zero);
-        let resolved_text_indent = text_indent
-            .length
-            .resolve(CSSPixelLength::new(known_dimensions.width.unwrap_or(0.0)))
-            .px();
-        inline_layout.layout.set_text_indent(
-            resolved_text_indent,
-            // NOTE: hanging and each_line don't current work because parsing them is cfg'd out in Stylo
-            // due to Servo not yet supporting those features. They should start to "just work" in Blitz
-            // once support is enabled in Stylo.
-            IndentOptions {
-                each_line: text_indent.each_line,
-                hanging: text_indent.hanging,
-            },
-        );
-
         let pbw = container_pb.horizontal_components().sum() * scale;
         let width = known_dimensions
             .width
             .map(|w| (w * scale) - pbw)
             .unwrap_or_else(|| {
-                // TODO: Cache content widths.
+                // Use cached content widths if available. The cache is invalidated whenever
+                // the Parley layout is rebuilt (see resolve_deferred_tasks). The cache stores
+                // both min-content and max-content widths from Parley's one-pass calculation.
                 //
-                // This is a little tricky as the size of the inline boxes may depend on whether we are sizing under
-                // and a min-content or max-content constraint. So if we want to compute both widths in one pass then
-                // we need to store both a min-content and max-content size on each box.
-                let content_sizes = inline_layout.layout.calculate_content_widths();
+                // Note: the inline box sizes set above (for ibox in inline_boxes_mut) affect
+                // the content width calculation, so the cache is only valid within a single
+                // resolve cycle where box sizes don't change. This holds because Taffy only
+                // re-lays-out the inline content when the available space (and thus box sizes)
+                // change, at which point the cache has been cleared.
+                let content_sizes = inline_layout.content_widths();
                 let min_content_width = content_sizes.min;
                 let max_content_width = content_sizes.max;
 
@@ -454,40 +451,68 @@ impl BaseDocument {
             state.set_line_x(initial_slot.x * scale);
             state.set_line_y((initial_slot.y * scale) as f64);
 
-            // TODO: revert state and retry layout if a line doesn't fit
-            //
-            // Save initial state. Saved state is used to revert the layout to a previous state if needed
-            // (e.g. to revert a line that doesn't fit in the space it was laid out into)
-            //
-            // let mut saved_state = breaker.state().clone();
+            // When a line overflows the float-constrained width (e.g. an
+            // unbreakable word wider than the float slot), subsequent lines
+            // should use the full content width and overflow past the float.
+            // saved_state retains the breaker state from the last unconstrained
+            // line, providing the full width as a fallback.
+            let mut saved_state = breaker.state().clone();
 
             while let Some(yield_data) = breaker.break_next() {
                 match yield_data {
-                    YieldData::LineBreak(_line_break_data) => {
+                    YieldData::LineBreak(line_break_data) => {
                         let state = breaker.state_mut();
 
                         if has_active_floats {
-                            // TODO: revert state and retry layout if a line doesn't fit
-                            // saved_state = state.clone();
+                            // Detect whether the just-broken line overflowed
+                            // the float-constrained width. Both advance and
+                            // line_max_advance are in Parley's scaled units.
+                            let overflow = line_break_data.advance > state.line_max_advance();
 
-                            let min_y = state.line_y() / scale as f64;
+                            let min_y = (state.line_y() + line_break_data.line_height as f64)
+                                / scale as f64;
                             let next_slot =
                                 block_ctx.find_content_slot(min_y as f32, Clear::None, None);
-                            has_active_floats = next_slot.segment_id.is_some();
+                            let next_has_floats = next_slot.segment_id.is_some();
 
-                            state.set_line_max_advance(next_slot.width * scale);
-                            state.set_line_x(next_slot.x * scale);
-                            state.set_line_y((next_slot.y * scale) as f64);
+                            if overflow && next_has_floats {
+                                // Line overflowed the float slot. Use full width
+                                // for the next line instead of constraining it.
+                                // The overflowed line stays as-is (already broken).
+                                state.set_line_max_advance(saved_state.line_max_advance());
+                                state.set_line_x(saved_state.line_x());
+                                state.set_line_y((next_slot.y * scale) as f64);
+                                has_active_floats = false;
+                            } else if next_has_floats {
+                                // DON'T update saved_state here — it retains the
+                                // last unconstrained state (full width) for use
+                                // if a subsequent line overflows. Updating it here
+                                // would overwrite with the constrained max_advance.
+                                state.set_line_max_advance(next_slot.width * scale);
+                                state.set_line_x(next_slot.x * scale);
+                                state.set_line_y((next_slot.y * scale) as f64);
+                            } else {
+                                saved_state = state.clone();
+                                state.set_line_x(0.0);
+                                state.set_line_max_advance(width);
+                                state.set_line_y(
+                                    state.line_y() + line_break_data.line_height as f64,
+                                );
+                                has_active_floats = false;
+                            }
                         } else {
+                            saved_state = state.clone();
                             state.set_line_x(0.0);
                             state.set_line_max_advance(width);
+                            state.set_line_y(state.line_y() + line_break_data.line_height as f64);
                         }
 
                         continue;
                     }
                     YieldData::MaxHeightExceeded(_data) => {
-                        // TODO
-                        continue;
+                        // The layout has exceeded the maximum allowed height.
+                        // Stop adding further lines. Previously placed lines remain.
+                        break;
                     }
                     YieldData::InlineBoxBreak(box_break_data) => {
                         let state = breaker.state_mut();
@@ -648,20 +673,30 @@ impl BaseDocument {
                         let layout = &mut self.nodes[ibox.id as usize].unrounded_layout;
                         layout.size = output.size;
 
-                        // TODO: Implement absolute positioning
+                        // Absolute positioning: inset values are measured from the padding box
+                        // of the containing block, not the border box. The container_pb offset
+                        // translates from border-box origin to padding-box origin.
                         layout.location.x = left
-                            .map(|left| left + margin.left)
+                            .map(|left| container_pb.left + left + margin.left)
                             .or_else(|| {
                                 right.map(|right| {
-                                    final_size.width - right - output.size.width - margin.right
+                                    final_size.width
+                                        - container_pb.right
+                                        - right
+                                        - output.size.width
+                                        - margin.right
                                 })
                             })
                             .unwrap_or((ibox.x / scale) + margin.left + container_pb.left);
                         layout.location.y = top
-                            .map(|top| top + margin.top)
+                            .map(|top| container_pb.top + top + margin.top)
                             .or_else(|| {
                                 bottom.map(|bottom| {
-                                    final_size.height - bottom - output.size.height - margin.bottom
+                                    final_size.height
+                                        - container_pb.bottom
+                                        - bottom
+                                        - output.size.height
+                                        - margin.bottom
                                 })
                             })
                             .unwrap_or((ibox.y / scale) + margin.top + container_pb.top);
@@ -692,11 +727,9 @@ impl BaseDocument {
         // println!("\n");
 
         // Put layout back
-        self.nodes[node_id]
-            .data
-            .downcast_element_mut()
-            .unwrap()
-            .inline_layout_data = Some(inline_layout);
+        if let Some(elem) = self.nodes[node_id].data.downcast_element_mut() {
+            elem.inline_layout_data = Some(inline_layout);
+        }
 
         let measured_size = final_size;
 

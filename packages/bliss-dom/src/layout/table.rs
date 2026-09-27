@@ -67,17 +67,20 @@ pub(crate) fn build_table_context(
     let children = std::mem::take(&mut root_node.children);
 
     let Some(stylo_styles) = root_node.primary_styles() else {
-        panic!("Ignoring table because it has no styles");
+        // Table has no computed styles — skip table layout construction
+        root_node.children = children;
+        return (TableContext {
+            style: Default::default(),
+            cells: Vec::new(),
+            rows: Vec::new(),
+            computed_grid_info: AtomicRefCell::new(None),
+            border_style: None,
+            border_collapse: BorderCollapse::Separate,
+        }, Vec::new());
     };
 
     let mut style = stylo_taffy::to_taffy_style(&stylo_styles);
     style.item_is_table = true;
-    // Use `dense` row-flow so that each cell scans the row from its
-    // leftmost column for the first free track. Without `dense`,
-    // `place_definite_secondary_axis_item` keeps a per-item secondary
-    // cursor across rows, which means cells in later rows do not
-    // backfill columns freed up by rowspan cells from earlier rows.
-    style.grid_auto_flow = taffy::GridAutoFlow::RowDense;
     style.grid_auto_columns = Vec::new();
     style.grid_auto_rows = Vec::new();
 
@@ -177,15 +180,14 @@ pub(crate) fn collect_table_cells(
     columns: &mut Vec<TrackSizingFunction>,
     first_cell_border: &mut Option<ServoArc<Border>>,
 ) {
-    let node = &mut doc.nodes[node_id];
+    let node = &doc.nodes[node_id];
 
     if !node.is_element() {
         return;
     }
 
     let Some(display) = node.primary_styles().map(|s| s.clone_display()) else {
-        #[cfg(feature = "tracing")]
-        tracing::info!("Ignoring table descendent because it has no styles");
+        println!("Ignoring table descendent because it has no styles");
         return;
     };
 
@@ -247,29 +249,33 @@ pub(crate) fn collect_table_cells(
         }
         DisplayInside::TableCell => {
             // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-            let stylo_style = &node.primary_styles().unwrap();
+            let Some(stylo_style) = node.primary_styles() else {
+                return;
+            };
             let colspan: u16 = node
                 .attr(local_name!("colspan"))
                 .and_then(|val| val.parse().ok())
                 .unwrap_or(1);
-            let rowspan: u16 = node
-                .attr(local_name!("rowspan"))
-                .and_then(|val| val.parse::<u16>().ok())
-                .map(|v| v.clamp(1, 65534))
-                .unwrap_or(1);
-            let mut style = stylo_taffy::to_taffy_style(stylo_style);
+            let mut style = stylo_taffy::to_taffy_style(&stylo_style);
 
             if first_cell_border.is_none() {
                 *first_cell_border = Some(stylo_style.clone_border());
             }
 
-            // TODO: account for padding/border/margin
+            // Account for padding and border in column width.
+            // Margin is not included — table cells do not use margin
+            // for column sizing per the CSS table layout spec.
+            // In `border-collapse: collapse` mode, cell borders are
+            // zeroed earlier, so the border addition is harmless.
             if *row == 1 {
                 let column = match style.size.width.tag() {
                     taffy::CompactLength::LENGTH_TAG => {
                         let len = style.size.width.value();
                         let padding = style.padding.resolve_or_zero(None, resolve_calc_value);
-                        style_helpers::length(len + padding.left + padding.right)
+                        let border = style.border.resolve_or_zero(None, resolve_calc_value);
+                        style_helpers::length(
+                            len + padding.left + padding.right + border.left + border.right,
+                        )
                     }
                     taffy::CompactLength::PERCENT_TAG => {
                         if is_fixed {
@@ -279,7 +285,8 @@ pub(crate) fn collect_table_cells(
                         }
                     }
                     taffy::CompactLength::AUTO_TAG => style_helpers::auto(),
-                    _ => unreachable!(),
+                    // Unknown tag — malformed CSS. Fall back to auto sizing.
+                    _ => style_helpers::auto(),
                 };
                 columns.push(column);
             }
@@ -290,18 +297,13 @@ pub(crate) fn collect_table_cells(
                 style.border = taffy::Rect::ZERO.map(style_helpers::length);
             }
 
-            // Let Taffy auto-place the column. Combined with
-            // `grid_auto_flow: RowDense` set on the table root, each cell
-            // scans from the first track in its row for a free position,
-            // which makes cells automatically skip columns occupied by
-            // rowspan cells from earlier rows.
             style.grid_column = taffy::Line {
-                start: style_helpers::auto(),
+                start: style_helpers::line((*col + 1) as i16),
                 end: style_helpers::span(colspan),
             };
             style.grid_row = taffy::Line {
                 start: style_helpers::line(*row as i16),
-                end: style_helpers::span(rowspan),
+                end: style_helpers::span(1),
             };
             style.size.width = style_helpers::auto();
             cells.push(TableCell { node_id, style });

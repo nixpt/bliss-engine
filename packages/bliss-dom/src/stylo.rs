@@ -4,15 +4,16 @@
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
-use crate::StyleThreading;
+use crate::layout::damage::ALL_DAMAGE;
 use crate::layout::damage::compute_layout_damage;
 use crate::node::Node;
 use crate::node::NodeData;
+use atomic_refcell::{AtomicRef, AtomicRefMut};
 use markup5ever::{LocalName, LocalNameStaticSet, Namespace, NamespaceStaticSet, local_name};
 use selectors::bloom::BLOOM_HASH_MASK;
 use selectors::{
     Element, OpaqueElement,
-    attr::{AttrSelectorOperation, NamespaceConstraint},
+    attr::{AttrSelectorOperation, AttrSelectorOperator, NamespaceConstraint},
     matching::{ElementSelectorFlags, MatchingContext, VisitedHandlingMode},
     sink::Push,
 };
@@ -22,14 +23,11 @@ use style::animation::AnimationState;
 use style::applicable_declarations::ApplicableDeclarationBlock;
 use style::bloom::each_relevant_element_hash;
 use style::color::AbsoluteColor;
-use style::data::{ElementDataMut, ElementDataRef};
 use style::dom::AttributeProvider;
-use style::global_style_data::STYLE_THREAD_POOL;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::ComputedValues;
 use style::properties::{Importance, PropertyDeclaration};
 use style::rule_tree::CascadeLevel;
-use style::rule_tree::CascadeOrigin;
 use style::selector_parser::PseudoElement;
 use style::selector_parser::RestyleDamage;
 use style::stylesheets::layer_rule::LayerOrder;
@@ -58,24 +56,82 @@ use style_dom::ElementState;
 use style::values::computed::text::TextAlign as StyloTextAlign;
 
 impl crate::document::BaseDocument {
+    /// Build (or rebuild) CascadeData for each shadow root from its scoped stylesheets.
+    /// Called during `resolve_stylist()` after the stylist flush, before the style traversal.
+    fn build_shadow_cascade_data(&mut self) {
+        use style::stylesheet_set::DocumentStylesheetSet;
+
+        if self.shadow_scoped_sheets.is_empty() {
+            return;
+        }
+
+        let shadow_root_ids: Vec<usize> = self.shadow_scoped_sheets.keys().copied().collect();
+        for shadow_root_id in shadow_root_ids {
+            let sheets = match self.shadow_scoped_sheets.get(&shadow_root_id) {
+                Some(s) if !s.is_empty() => s.clone(),
+                _ => continue,
+            };
+
+            let mut set = DocumentStylesheetSet::<style::stylesheets::DocumentStyleSheet>::new();
+            for sheet in &sheets {
+                let guard = self.guard.read();
+                set.append_stylesheet(
+                    Some(self.stylist.device()),
+                    &Default::default(),
+                    sheet.clone(),
+                    &guard,
+                );
+            }
+
+            let guard = self.guard.read();
+            let mut flusher = set.flush::<BlissNode>(None, None);
+            let author_flusher = flusher.flush_origin(style::stylesheets::origin::Origin::Author);
+            let mut cascade_data = style::stylist::CascadeData::new();
+            if cascade_data
+                .rebuild(
+                    self.stylist.device(),
+                    style::context::QuirksMode::NoQuirks,
+                    author_flusher,
+                    &guard,
+                )
+                .is_ok()
+            {
+                self.shadow_cascade_data
+                    .insert(shadow_root_id, Box::new(cascade_data));
+            }
+        }
+    }
+
     pub fn resolve_stylist(&mut self, now: f64) {
         style::thread_state::enter(ThreadState::LAYOUT);
 
-        let guard = &self.guard;
-        let guards = StylesheetGuards {
-            author: &guard.read(),
-            ua_or_user: &guard.read(),
-        };
+        // Phase 1: Flush the stylist's own cascade data.
+        // The read guard is scoped to this block so its borrow of `self` is
+        // released before the `&mut self` work in phases 2/3.
+        // (A second, separate read guard is acquired in Phase 4 below —
+        // both are needed because the `&mut self` work in between forces
+        // us to drop the guard before re-acquiring.)
+        {
+            let guard = self.guard.read();
+            let guards = StylesheetGuards {
+                author: &guard,
+                ua_or_user: &guard,
+            };
 
-        let root = TDocument::as_node(&&self.nodes[0])
-            .first_element_child()
-            .unwrap()
-            .as_element()
-            .unwrap();
+            let root = TDocument::as_node(&&self.nodes[0])
+                .first_element_child()
+                .unwrap()
+                .as_element()
+                .unwrap();
 
-        self.stylist
-            .flush(&guards)
-            .process_style(root, Some(&self.snapshots));
+            self.stylist
+                .flush(&guards, Some(root), Some(&self.snapshots));
+        }
+
+        // Phase 2: Build per-shadow-root cascade data from scoped stylesheets.
+        self.build_shadow_cascade_data();
+
+        // Phase 3: Mark actively animating nodes as dirty.
 
         // Mark actively animating nodes as dirty
         let mut sets = self.animations.sets.write();
@@ -105,32 +161,43 @@ impl crate::document::BaseDocument {
         }
         drop(sets);
 
-        // Build the style context used by the style traversal
-        let context = SharedStyleContext {
-            traversal_flags: TraversalFlags::empty(),
-            stylist: &self.stylist,
-            options: GLOBAL_STYLE_DATA.options.clone(),
-            guards,
-            visited_styles_enabled: false,
-            animations: self.animations.clone(),
-            current_time_for_animations: now,
-            snapshot_map: &self.snapshots,
-            registered_speculative_painters: &RegisteredPaintersImpl,
-        };
+        // Build the style context used by the style traversal.
+        // The read guard is scoped to this block so it lives through the
+        // traversal and is released before the `&mut self` cleanup below.
+        // (See Phase 1 above for why the guard is re-acquired here rather
+        // than hoisted to function scope.)
+        {
+            let guard = self.guard.read();
+            let guards = StylesheetGuards {
+                author: &guard,
+                ua_or_user: &guard,
+            };
 
-        // components/layout_2020/lib.rs:983
-        let root = self.root_element();
-        // dbg!(root);
-        let token = RecalcStyle::pre_traverse(root, &context);
+            let context = SharedStyleContext {
+                traversal_flags: TraversalFlags::empty(),
+                stylist: &self.stylist,
+                options: GLOBAL_STYLE_DATA.options.clone(),
+                guards,
+                visited_styles_enabled: false,
+                animations: self.animations.clone(),
+                current_time_for_animations: now,
+                snapshot_map: &self.snapshots,
+                registered_speculative_painters: &RegisteredPaintersImpl,
+            };
 
-        if token.should_traverse() {
-            // Style the elements, resolving their data
-            let traverser = RecalcStyle::new(context);
-            // `Sequential` bypasses Stylo's global pool. See `StyleThreading`.
-            let pool_guard = matches!(self.style_threading, StyleThreading::Parallel)
-                .then(|| STYLE_THREAD_POOL.pool());
-            let rayon_pool = pool_guard.as_ref().and_then(|g| g.as_ref());
-            style::driver::traverse_dom(&traverser, token, rayon_pool);
+            // components/layout_2020/lib.rs:983
+            // D-2c-followup: root_element widened to Option<&Node>. Skip the
+            // entire style traversal when there is no root element to root
+            // from — pre_traverse requires a ConcreteElement.
+            if let Some(root) = self.root_element() {
+                let token = RecalcStyle::pre_traverse(root, &context);
+
+                if token.should_traverse() {
+                    // Style the elements, resolving their data
+                    let traverser = RecalcStyle::new(context);
+                    style::driver::traverse_dom(&traverser, token, None);
+                }
+            }
         }
 
         for opaque in self.snapshots.keys() {
@@ -153,9 +220,6 @@ impl crate::document::BaseDocument {
         }
         sets.retain(|_, state| !state.is_empty());
         self.has_active_animations = sets.values().any(|state| state.needs_animation_ticks());
-
-        // Maybe run garbage collection. Stylo has internal to determine whether to run or not.
-        self.stylist.rule_tree().maybe_gc();
 
         style::thread_state::exit(ThreadState::LAYOUT);
     }
@@ -205,14 +269,27 @@ impl<'a> TShadowRoot for BlissNode<'a> {
     }
 
     fn host(&self) -> <Self::ConcreteNode as TNode>::ConcreteElement {
-        unimplemented!("Shadow roots are not yet implemented")
+        if let NodeData::ShadowRoot { host } = self.data {
+            // Guard stale host ID: if the host node was removed from the tree,
+            // with() would unwrap-panic. Return self as fallback.
+            self.tree().get(host).unwrap_or(self)
+        } else {
+            // Fallback: return self if not a shadow root (shouldn't happen)
+            self
+        }
     }
 
     fn style_data<'b>(&self) -> Option<&'b style::stylist::CascadeData>
     where
         Self: 'b,
     {
-        unimplemented!("Shadow roots are not yet implemented")
+        // Access the scoped cascade data stored on the owning BaseDocument.
+        // The doc pointer on Node is set at creation time and the BaseDocument
+        // is guaranteed to outlive all its Nodes.
+        let doc = self.doc();
+        doc.shadow_cascade_data
+            .get(&self.id)
+            .map(|boxed| &**boxed as &style::stylist::CascadeData)
     }
 }
 
@@ -281,14 +358,16 @@ impl<'a> TNode for BlissNode<'a> {
     }
 
     fn as_shadow_root(&self) -> Option<Self::ConcreteShadowRoot> {
-        // TODO: implement shadow DOM
-        None
+        if matches!(self.data, NodeData::ShadowRoot { .. }) {
+            Some(self)
+        } else {
+            None
+        }
     }
 }
 
 impl AttributeProvider for BlissNode<'_> {
-    fn get_attr(&self, attr: &style::LocalName, _ns: &style::Namespace) -> Option<String> {
-        // TODO: filter by namespace
+    fn get_attr(&self, attr: &style::LocalName) -> Option<String> {
         self.attr(attr.0.clone()).map(|s| s.to_string())
     }
 }
@@ -313,10 +392,19 @@ impl selectors::Element for BlissNode<'_> {
     }
 
     fn parent_node_is_shadow_root(&self) -> bool {
-        false
+        self.parent_node()
+            .map(|parent| matches!(parent.data, NodeData::ShadowRoot { .. }))
+            .unwrap_or(false)
     }
 
     fn containing_shadow_host(&self) -> Option<Self> {
+        let mut current = self.parent_node();
+        while let Some(parent) = current {
+            if let NodeData::ShadowRoot { host } = parent.data {
+                return Some(self.with(host));
+            }
+            current = parent.parent_node();
+        }
         None
     }
 
@@ -377,9 +465,37 @@ impl selectors::Element for BlissNode<'_> {
         local_name: &GenericAtomIdent<LocalNameStaticSet>,
         operation: &AttrSelectorOperation<&AtomString>,
     ) -> bool {
-        match self.data.attr(local_name.0.clone()) {
-            None => false,
-            Some(attr_value) => operation.eval_str(attr_value),
+        let Some(attr_value) = self.data.attr(local_name.0.clone()) else {
+            return false;
+        };
+
+        match operation {
+            AttrSelectorOperation::Exists => true,
+            AttrSelectorOperation::WithValue {
+                operator,
+                case_sensitivity: _,
+                value,
+            } => {
+                let value = value.as_ref();
+
+                // TODO: case sensitivity
+                match operator {
+                    AttrSelectorOperator::Equal => attr_value == value,
+                    AttrSelectorOperator::Includes => attr_value
+                        .split_ascii_whitespace()
+                        .any(|word| word == value),
+                    AttrSelectorOperator::DashMatch => {
+                        // Represents elements with an attribute name of attr whose value can be exactly value
+                        // or can begin with value immediately followed by a hyphen, - (U+002D)
+                        attr_value.starts_with(value)
+                            && (attr_value.len() == value.len()
+                                || attr_value.chars().nth(value.len()) == Some('-'))
+                    }
+                    AttrSelectorOperator::Prefix => attr_value.starts_with(value),
+                    AttrSelectorOperator::Substring => attr_value.contains(value),
+                    AttrSelectorOperator::Suffix => attr_value.ends_with(value),
+                }
+            }
         }
     }
 
@@ -435,7 +551,6 @@ impl selectors::Element for BlissNode<'_> {
 
             NonTSPseudoClass::InRange => false,
             NonTSPseudoClass::Modal => false,
-            NonTSPseudoClass::Open => false,
             NonTSPseudoClass::Optional => false,
             NonTSPseudoClass::OutOfRange => false,
             NonTSPseudoClass::PopoverOpen => false,
@@ -463,17 +578,14 @@ impl selectors::Element for BlissNode<'_> {
         // Handle flags that apply to the element.
         let self_flags = flags.for_self();
         if !self_flags.is_empty() {
-            self.selector_flags
-                .set(self.selector_flags.get() | self_flags);
+            *self.selector_flags.borrow_mut() |= self_flags;
         }
 
         // Handle flags that apply to the parent.
         let parent_flags = flags.for_parent();
         if !parent_flags.is_empty() {
             if let Some(parent) = self.parent_node() {
-                parent
-                    .selector_flags
-                    .set(parent.selector_flags.get() | parent_flags);
+                *parent.selector_flags.borrow_mut() |= parent_flags;
             }
         }
     }
@@ -483,7 +595,7 @@ impl selectors::Element for BlissNode<'_> {
     }
 
     fn is_html_slot_element(&self) -> bool {
-        false
+        self.data.is_element_with_tag_name(&local_name!("slot"))
     }
 
     fn has_id(
@@ -674,26 +786,41 @@ impl<'a> TElement for BlissNode<'a> {
         0
     }
 
-    unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
-        // SAFETY: stylo traversal has exclusive access to nodes
-        unsafe { self.stylo_element_data.ensure_init() }
+    unsafe fn ensure_data(&self) -> AtomicRefMut<'_, style::data::ElementData> {
+        let mut stylo_data = self.stylo_element_data.borrow_mut();
+        if stylo_data.is_none() {
+            *stylo_data = Some(style::data::ElementData {
+                damage: ALL_DAMAGE,
+                ..Default::default()
+            });
+        }
+        AtomicRefMut::map(stylo_data, |sd| sd.as_mut().unwrap())
     }
 
     unsafe fn clear_data(&self) {
-        // SAFETY: stylo traversal has exclusive access to nodes
-        unsafe { self.stylo_element_data.clear() }
+        *self.stylo_element_data.borrow_mut() = None;
     }
 
     fn has_data(&self) -> bool {
-        self.stylo_element_data.has_data()
+        self.stylo_element_data.borrow().is_some()
     }
 
-    fn borrow_data(&self) -> Option<ElementDataRef<'_>> {
-        self.stylo_element_data.get()
+    fn borrow_data(&self) -> Option<AtomicRef<'_, style::data::ElementData>> {
+        let stylo_data = self.stylo_element_data.borrow();
+        if stylo_data.is_some() {
+            Some(AtomicRef::map(stylo_data, |sd| sd.as_ref().unwrap()))
+        } else {
+            None
+        }
     }
 
-    fn mutate_data(&self) -> Option<ElementDataMut<'_>> {
-        unsafe { self.stylo_element_data.unsafe_stylo_only_mut() }
+    fn mutate_data(&self) -> Option<AtomicRefMut<'_, style::data::ElementData>> {
+        let stylo_data = self.stylo_element_data.borrow_mut();
+        if stylo_data.is_some() {
+            Some(AtomicRefMut::map(stylo_data, |sd| sd.as_mut().unwrap()))
+        } else {
+            None
+        }
     }
 
     fn skip_item_display_fixup(&self) -> bool {
@@ -751,10 +878,20 @@ impl<'a> TElement for BlissNode<'a> {
     }
 
     fn shadow_root(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {
-        None
+        self.children
+            .iter()
+            .find(|&&child_id| self.with(child_id).is_shadow_root())
+            .map(|&child_id| self.with(child_id))
     }
 
     fn containing_shadow(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {
+        let mut current = self.parent_node();
+        while let Some(parent) = current {
+            if matches!(parent.data, NodeData::ShadowRoot { .. }) {
+                return Some(parent);
+            }
+            current = parent.parent_node();
+        }
         None
     }
 
@@ -806,7 +943,7 @@ impl<'a> TElement for BlissNode<'a> {
                     self.guard
                         .wrap(PropertyDeclarationBlock::with_one(decl, Importance::Normal)),
                 ),
-                CascadeLevel::new(CascadeOrigin::PresHints),
+                CascadeLevel::PresHints,
                 LayerOrder::root(),
             ));
         };
@@ -934,10 +1071,46 @@ impl<'a> TElement for BlissNode<'a> {
 
     fn query_container_size(
         &self,
-        _display: &style::values::specified::Display,
+        display: &style::values::specified::Display,
     ) -> euclid::default::Size2D<Option<app_units::Au>> {
-        // FIXME: Implement container queries. For now this effectively disables them without panicking.
-        Default::default()
+        // Elements with display: contents don't generate a box and cannot be containers.
+        use style::values::specified::box_::DisplayInside;
+        if matches!(display.inside(), DisplayInside::Contents) {
+            return euclid::default::Size2D::new(None, None);
+        }
+
+        // Check whether this element is a container (container-type != normal).
+        let Some(style) = self.primary_styles() else {
+            return euclid::default::Size2D::new(None, None);
+        };
+        let ct = style.clone_container_type();
+        use style::properties::longhands::container_type::computed_value::T as ContainerType;
+        if ct == ContainerType::NORMAL {
+            return euclid::default::Size2D::new(None, None);
+        }
+
+        // Return the content box size from the previous frame's layout.
+        // Container sizes are only available after the first layout pass;
+        // on the very first frame this returns None (container queries won't match).
+        use app_units::Au;
+        let raw = self.final_layout.size;
+        let pad = self.final_layout.padding;
+        let bor = self.final_layout.border;
+        let inner_w = (raw.width - pad.left - pad.right - bor.left - bor.right).max(0.0);
+        let inner_h = (raw.height - pad.top - pad.bottom - bor.top - bor.bottom).max(0.0);
+
+        euclid::default::Size2D::new(
+            if inner_w > 0.0 {
+                Some(Au((inner_w * 60.0f32) as i32))
+            } else {
+                None
+            },
+            if inner_h > 0.0 {
+                Some(Au((inner_h * 60.0f32) as i32))
+            } else {
+                None
+            },
+        )
     }
 
     fn each_custom_state<F>(&self, _callback: F)
@@ -948,11 +1121,11 @@ impl<'a> TElement for BlissNode<'a> {
     }
 
     fn has_selector_flags(&self, flags: ElementSelectorFlags) -> bool {
-        self.selector_flags.get().contains(flags)
+        self.selector_flags.borrow().contains(flags)
     }
 
     fn relative_selector_search_direction(&self) -> ElementSelectorFlags {
-        let flags = self.selector_flags.get();
+        let flags = self.selector_flags.borrow();
         if flags.contains(ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING)
         {
             ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING
@@ -1051,14 +1224,18 @@ where
         node: E::ConcreteNode,
         note_child: F,
     ) {
-        if let Some(el) = node.as_element() {
-            // let mut data = el.mutate_data().unwrap();
-            let mut data = unsafe { el.ensure_data() };
-            recalc_style_at(self, traversal_data, context, el, &mut data, note_child);
-
-            // Gets set later on
-            unsafe { el.unset_dirty_descendants() }
+        // Don't process textnodees in this traversal
+        if node.is_text_node() {
+            return;
         }
+
+        let el = node.as_element().unwrap();
+        // let mut data = el.mutate_data().unwrap();
+        let mut data = unsafe { el.ensure_data() };
+        recalc_style_at(self, traversal_data, context, el, &mut data, note_child);
+
+        // Gets set later on
+        unsafe { el.unset_dirty_descendants() }
     }
 
     #[inline]

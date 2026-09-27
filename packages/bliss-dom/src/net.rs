@@ -5,9 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize, mpsc::Sender},
 };
 use style::{
-    font_face::{
-        FontFaceSourceFormat, FontFaceSourceFormatKeyword, FontStyle as StyloFontStyle, Source,
-    },
+    font_face::{FontFaceSourceFormat, FontFaceSourceFormatKeyword, Source},
     media_queries::MediaList,
     servo_arc::Arc as ServoArc,
     shared_lock::SharedRwLock,
@@ -20,40 +18,12 @@ use style::{
     values::{CssUrl, SourceLocation},
 };
 
-use bliss_traits::net::{AbortSignal, Bytes, NetHandler, NetProvider, Request};
+use bliss_traits::net::{Bytes, NetHandler, NetProvider, Request};
 use bliss_traits::shell::ShellProvider;
 
 use url::Url;
 
 use crate::{document::DocumentEvent, util::ImageType};
-
-pub(crate) fn stamped_request(url: Url, signal: Option<&AbortSignal>) -> Request {
-    let mut req = Request::get(url);
-    if let Some(sig) = signal {
-        req = req.signal(sig.clone());
-    }
-    req
-}
-
-/// Carries `@font-face` descriptors from CSS parsing through to font
-/// registration so `parley::Collection::register_fonts` can alias the bytes
-/// under the `font-family` declared in CSS rather than whatever family name
-/// the TTF's own `name` table reports.
-///
-/// All fields are `Option` because each descriptor is independently optional
-/// at the CSS level. Missing fields fall back to the values parley reads
-/// from the font's own metadata.
-#[derive(Clone, Debug, Default)]
-pub struct FontFaceOverrides {
-    /// `font-family` descriptor (the alias the rest of the stylesheet uses).
-    pub family_name: Option<String>,
-    /// `font-weight` descriptor as a single CSS weight (100–900). Stylo
-    /// parses this as a range; we record the lower bound, which equals the
-    /// upper bound in the common single-value case.
-    pub weight: Option<f32>,
-    /// `font-style` descriptor mapped to fontique's `FontStyle`.
-    pub style: Option<parley::fontique::FontStyle>,
-}
 
 #[derive(Clone, Debug)]
 pub enum Resource {
@@ -61,7 +31,7 @@ pub enum Resource {
     #[cfg(feature = "svg")]
     Svg(ImageType, Arc<usvg::Tree>),
     Css(DocumentStyleSheet),
-    Font(Bytes, FontFaceOverrides),
+    Font(Bytes),
     None,
 }
 
@@ -106,10 +76,6 @@ impl<T: Send + Sync + 'static> ResourceHandler<T> {
         Box::new(Self::new(tx, doc_id, node_id, shell_provider, data)) as _
     }
 
-    pub(crate) fn request_id(&self) -> usize {
-        self.request_id
-    }
-
     fn respond(&self, resolved_url: String, result: Result<Resource, String>) {
         let response = ResourceLoadResponse {
             request_id: self.request_id,
@@ -134,7 +100,6 @@ pub struct StylesheetHandler {
     pub source_url: Url,
     pub guard: SharedRwLock,
     pub net_provider: Arc<dyn NetProvider>,
-    pub abort_signal: Option<AbortSignal>,
 }
 
 impl NetHandler for ResourceHandler<StylesheetHandler> {
@@ -157,7 +122,6 @@ impl NetHandler for ResourceHandler<StylesheetHandler> {
                 doc_id: self.doc_id,
                 net_provider: self.data.net_provider.clone(),
                 shell_provider: self.shell_provider.clone(),
-                abort_signal: self.data.abort_signal.clone(),
             }),
             None, // error_reporter
             QuirksMode::NoQuirks,
@@ -177,7 +141,6 @@ pub(crate) struct StylesheetLoader {
     pub(crate) doc_id: usize,
     pub(crate) net_provider: Arc<dyn NetProvider>,
     pub(crate) shell_provider: Arc<dyn ShellProvider>,
-    pub(crate) abort_signal: Option<AbortSignal>,
 }
 impl ServoStylesheetLoader for StylesheetLoader {
     fn request_stylesheet(
@@ -207,11 +170,23 @@ impl ServoStylesheetLoader for StylesheetLoader {
             source_location: location,
         };
 
-        let url = import.url.url().unwrap().clone();
+        let url = match import.url.url() {
+            Some(url) => url.clone(),
+            None => {
+                // Malformed CSS @import URL — return a refused import
+                return ServoArc::new(lock.wrap(ImportRule {
+                    url: import.url,
+                    stylesheet: ImportSheet::new_refused(),
+                    supports: import.supports,
+                    layer: import.layer,
+                    source_location: import.source_location,
+                }));
+            }
+        };
         let import = ServoArc::new(lock.wrap(import));
         self.net_provider.fetch(
             self.doc_id,
-            stamped_request(url.as_ref().clone(), self.abort_signal.as_ref()),
+            Request::get(url.as_ref().clone()),
             ResourceHandler::boxed(
                 self.tx.clone(),
                 self.doc_id,
@@ -271,7 +246,6 @@ impl NetHandler for ResourceHandler<NestedStylesheetHandler> {
             &self.data.net_provider,
             &self.shell_provider,
             &self.data.lock.read(),
-            self.data.loader.abort_signal.as_ref(),
         );
 
         let mut guard = self.data.lock.write();
@@ -282,10 +256,7 @@ impl NetHandler for ResourceHandler<NestedStylesheetHandler> {
     }
 }
 
-struct FontFaceHandler {
-    format: FontFaceSourceFormatKeyword,
-    overrides: FontFaceOverrides,
-}
+struct FontFaceHandler(FontFaceSourceFormatKeyword);
 impl NetHandler for ResourceHandler<FontFaceHandler> {
     fn bytes(mut self: Box<Self>, resolved_url: String, bytes: Bytes) {
         let result = self.data.parse(bytes);
@@ -294,15 +265,15 @@ impl NetHandler for ResourceHandler<FontFaceHandler> {
 }
 impl FontFaceHandler {
     fn parse(&mut self, bytes: Bytes) -> Result<Resource, String> {
-        if self.format == FontFaceSourceFormatKeyword::None && bytes.len() >= 4 {
-            self.format = match &bytes.as_ref()[0..4] {
+        if self.0 == FontFaceSourceFormatKeyword::None && bytes.len() >= 4 {
+            self.0 = match &bytes.as_ref()[0..4] {
                 // WOFF (v1) files begin with 0x774F4646 ('wOFF' in ascii)
                 // See: <https://w3c.github.io/woff/woff1/spec/Overview.html#WOFFHeader>
-                #[cfg(feature = "woff")]
+                #[cfg(feature = "woff-rust")]
                 b"wOFF" => FontFaceSourceFormatKeyword::Woff,
                 // WOFF2 files begin with 0x774F4632 ('wOF2' in ascii)
                 // See: <https://w3c.github.io/woff/woff2/#woff20Header>
-                #[cfg(feature = "woff")]
+                #[cfg(feature = "woff-rust")]
                 b"wOF2" => FontFaceSourceFormatKeyword::Woff2,
                 // Opentype fonts with CFF data begin with 0x4F54544F ('OTTO' in ascii)
                 // See: <https://learn.microsoft.com/en-us/typography/opentype/spec/otff#organization-of-an-opentype-font>
@@ -318,16 +289,17 @@ impl FontFaceHandler {
         }
 
         // Satisfy rustc's mutability linting with woff feature both enabled/disabled
-        #[cfg(feature = "woff")]
+        #[cfg(feature = "woff-rust")]
         let mut bytes = bytes;
 
-        match self.format {
-            #[cfg(feature = "woff")]
+        match self.0 {
+            #[cfg(feature = "woff-rust")]
             FontFaceSourceFormatKeyword::Woff => {
                 #[cfg(feature = "tracing")]
                 tracing::info!("Decompressing woff1 font");
 
                 // Use wuff crate to decompress font
+                #[cfg(feature = "woff-rust")]
                 let decompressed = wuff::decompress_woff1(&bytes).ok();
 
                 if let Some(decompressed) = decompressed {
@@ -337,12 +309,13 @@ impl FontFaceHandler {
                     tracing::warn!("Failed to decompress woff1 font");
                 }
             }
-            #[cfg(feature = "woff")]
+            #[cfg(feature = "woff-rust")]
             FontFaceSourceFormatKeyword::Woff2 => {
                 #[cfg(feature = "tracing")]
                 tracing::info!("Decompressing woff2 font");
 
                 // Use wuff crate to decompress font
+                #[cfg(feature = "woff-rust")]
                 let decompressed = wuff::decompress_woff2(&bytes).ok();
 
                 if let Some(decompressed) = decompressed {
@@ -359,11 +332,10 @@ impl FontFaceHandler {
             _ => {}
         }
 
-        Ok(Resource::Font(bytes, std::mem::take(&mut self.overrides)))
+        Ok(Resource::Font(bytes))
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn fetch_font_face(
     tx: Sender<DocumentEvent>,
     doc_id: usize,
@@ -372,33 +344,16 @@ pub(crate) fn fetch_font_face(
     network_provider: &Arc<dyn NetProvider>,
     shell_provider: &Arc<dyn ShellProvider>,
     read_guard: &SharedRwLockReadGuard,
-    abort_signal: Option<&AbortSignal>,
 ) {
     sheet
         .contents(read_guard)
         .rules(read_guard)
         .iter()
         .filter_map(|rule| match rule {
-            CssRule::FontFace(font_face) => {
-                let descriptor = &font_face.read_with(read_guard).descriptors;
-                let family = descriptor.font_family.as_ref()?;
-                let src = descriptor.src.as_ref()?;
-                // Capture the @font-face descriptors so parley can register
-                // the font under the CSS-declared family name (and weight /
-                // style) rather than whatever metadata the TTF reports.
-                let overrides = FontFaceOverrides {
-                    family_name: Some(family.name.to_string()),
-                    weight: descriptor
-                        .font_weight
-                        .as_ref()
-                        .map(|range| range.0.compute().value()),
-                    style: descriptor.font_style.as_ref().map(stylo_to_fontique_style),
-                };
-                Some((src, overrides))
-            }
+            CssRule::FontFace(font_face) => font_face.read_with(read_guard).sources.as_ref(),
             _ => None,
         })
-        .for_each(|(source_list, overrides)| {
+        .for_each(|source_list| {
             // Find the first font source in the source list that specifies a font of a type
             // that we support.
             let preferred_source = source_list
@@ -443,7 +398,7 @@ pub(crate) fn fetch_font_face(
                         return None;
                     }
 
-                    #[cfg(not(feature = "woff"))]
+                    #[cfg(not(feature = "woff-rust"))]
                     if matches!(
                         format,
                         FontFaceSourceFormatKeyword::Woff | FontFaceSourceFormatKeyword::Woff2
@@ -453,47 +408,24 @@ pub(crate) fn fetch_font_face(
                         return None;
                     }
 
-                    let url = url_source.url.url().unwrap().as_ref().clone();
-                    Some((url, format))
+                    let url = url_source.url.url()?;
+                    Some((url.as_ref().clone(), format))
                 });
 
             if let Some((url, format)) = preferred_source {
                 network_provider.fetch(
                     doc_id,
-                    stamped_request(url, abort_signal),
+                    Request::get(url),
                     ResourceHandler::boxed(
                         tx.clone(),
                         doc_id,
                         node_id,
                         shell_provider.clone(),
-                        FontFaceHandler { format, overrides },
+                        FontFaceHandler(format),
                     ),
                 );
             }
         })
-}
-
-/// Translate stylo's `@font-face` `font-style` descriptor into the fontique
-/// `FontStyle` enum used by parley. Stylo encodes Italic and Oblique-with-
-/// angle distinctly; CSS's bare `normal` is parsed as `Oblique(0deg, 0deg)`
-/// by stylo (see the `FontStyle::parse` impl in stylo's `font_face.rs`), so
-/// that pattern is treated as `Normal` here.
-fn stylo_to_fontique_style(style: &StyloFontStyle) -> parley::fontique::FontStyle {
-    use parley::fontique::FontStyle as Fq;
-    match style {
-        StyloFontStyle::Italic => Fq::Italic,
-        StyloFontStyle::Oblique(min, max) => {
-            let angle = min.degrees();
-            // Stylo emits `Oblique(0deg, 0deg)` for the literal CSS `normal`
-            // keyword. Map that back to `Normal` so parley's font matching
-            // doesn't misclassify upright fonts.
-            if angle == 0.0 && max.degrees() == 0.0 {
-                Fq::Normal
-            } else {
-                Fq::Oblique(Some(angle))
-            }
-        }
-    }
 }
 
 pub struct ImageHandler {
@@ -514,82 +446,29 @@ impl NetHandler for ResourceHandler<ImageHandler> {
 
 impl ImageHandler {
     fn parse(&self, bytes: Bytes) -> Result<Resource, String> {
-        let image_err = match image::ImageReader::new(Cursor::new(&bytes))
+        // Try parse image
+        if let Ok(image) = image::ImageReader::new(Cursor::new(&bytes))
             .with_guessed_format()
             .expect("IO errors impossible with Cursor")
             .decode()
         {
-            Ok(image) => {
-                let raw_rgba8_data = image.clone().into_rgba8().into_raw();
-                return Ok(Resource::Image(
-                    self.kind,
-                    image.width(),
-                    image.height(),
-                    Arc::new(raw_rgba8_data),
-                ));
-            }
-            Err(e) => e.to_string(),
+            let raw_rgba8_data = image.clone().into_rgba8().into_raw();
+            return Ok(Resource::Image(
+                self.kind,
+                image.width(),
+                image.height(),
+                Arc::new(raw_rgba8_data),
+            ));
         };
 
         #[cfg(feature = "svg")]
-        let svg_err = {
+        {
             use crate::util::parse_svg;
-            match parse_svg(&bytes) {
-                Ok(tree) => return Ok(Resource::Svg(self.kind, Arc::new(tree))),
-                Err(e) => e.to_string(),
+            if let Ok(tree) = parse_svg(&bytes) {
+                return Ok(Resource::Svg(self.kind, Arc::new(tree)));
             }
-        };
-        #[cfg(not(feature = "svg"))]
-        let svg_err = "svg feature disabled";
+        }
 
-        Err(format!(
-            "Could not parse image ({} bytes): image-crate error: {image_err}; svg fallback error: {svg_err}",
-            bytes.len()
-        ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use parley::fontique::FontStyle as Fq;
-    use style::values::specified::Angle;
-
-    fn oblique(min_deg: f32, max_deg: f32) -> StyloFontStyle {
-        StyloFontStyle::Oblique(
-            Angle::from_degrees(min_deg, false),
-            Angle::from_degrees(max_deg, false),
-        )
-    }
-
-    #[test]
-    fn italic_maps_to_italic() {
-        assert_eq!(stylo_to_fontique_style(&StyloFontStyle::Italic), Fq::Italic,);
-    }
-
-    #[test]
-    fn oblique_zero_zero_maps_to_normal() {
-        // Stylo parses bare CSS `normal` as `Oblique(0deg, 0deg)`; the
-        // helper must round-trip that back to `FontStyle::Normal` so
-        // parley's matching doesn't misclassify upright fonts.
-        assert_eq!(stylo_to_fontique_style(&oblique(0.0, 0.0)), Fq::Normal);
-    }
-
-    #[test]
-    fn oblique_single_angle_maps_to_oblique_with_min() {
-        assert_eq!(
-            stylo_to_fontique_style(&oblique(14.0, 14.0)),
-            Fq::Oblique(Some(14.0)),
-        );
-    }
-
-    #[test]
-    fn oblique_range_uses_min_angle() {
-        // For a range, fontique's single-angle representation takes the
-        // lower bound — confirm `min` (not `max`) is what gets through.
-        assert_eq!(
-            stylo_to_fontique_style(&oblique(10.0, 20.0)),
-            Fq::Oblique(Some(10.0)),
-        );
+        Err(String::from("Could not parse image"))
     }
 }

@@ -11,9 +11,7 @@ pub(crate) struct LayerManager {
     layer_depth: Cell<u32>,
     layers_wanted: Cell<u32>,
 
-    /// Watermark: maximum `layer_depth` ever reached. Updated each time a
-    /// layer is pushed; never decremented when layers pop. Useful for
-    /// diagnosing layer-stack depth pressure.
+    #[allow(unused)] // Only used for debugging. Enabled as required.
     layer_depth_used: Cell<u32>,
 }
 
@@ -43,7 +41,7 @@ impl LayerManager {
         if !condition {
             return false;
         }
-        self.layers_wanted.update(|x| x + 1);
+        self.layers_wanted.set(self.layers_wanted.get() + 1);
 
         // Check if clips are above limit
         let layers_available = self.layers_used.get() <= LAYER_LIMIT;
@@ -59,10 +57,10 @@ impl LayerManager {
         };
 
         // Update accounting
-        self.layers_used.update(|x| x + 1);
-        self.layer_depth.update(|x| x + 1);
+        self.layers_used.set(self.layers_used.get() + 1);
+        self.layer_depth.set(self.layer_depth.get() + 1);
         self.layer_depth_used
-            .update(|x| x.max(self.layer_depth.get()));
+            .set(self.layer_depth_used.get().max(self.layer_depth.get()));
 
         true
     }
@@ -70,7 +68,7 @@ impl LayerManager {
     pub(crate) fn maybe_pop_layer(&self, scene: &mut impl PaintScene, condition: bool) {
         if condition {
             scene.pop_layer();
-            self.layer_depth.update(|x| x - 1);
+            self.layer_depth.set(self.layer_depth.get() - 1);
         }
     }
 }

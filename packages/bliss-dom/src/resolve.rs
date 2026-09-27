@@ -43,8 +43,7 @@ impl BaseDocument {
             .first_element_child()
             .is_none()
         {
-            #[cfg(feature = "tracing")]
-            tracing::warn!("No DOM - not resolving");
+            println!("No DOM - not resolving");
             return;
         }
 
@@ -53,7 +52,21 @@ impl BaseDocument {
 
         self.resolve_scroll_animation();
 
-        let root_node_id = self.root_element().id;
+        // D-2c-followup: root_element widened to Option<&Node>. The early
+        // `is_none()` guard above ensures this branch is only taken when a root
+        // element exists, so `unwrap_or(0)` is dead — but it's still the
+        // compiler requirement. The guard above is now LOAD-BEARING for the
+        // unwrap_or(0) safety: deleting it would silently propagate `0` to
+        // `propagate_damage_flags` / `flush_styles_to_layout`, which would
+        // compute layout against the document root node (id 0, an empty
+        // layout block) producing garbage layout with no panic. The
+        // debug_assert below catches a future refactor that breaks this
+        // invariant on day 1.
+        debug_assert!(
+            self.root_element().is_some(),
+            "resolve: 'no DOM' guard above lost its effect — root_element became None when an element child was expected"
+        );
+        let root_node_id = self.root_element().map(|r| r.id).unwrap_or(0);
         debug_timer!(timer, feature = "log_phase_times");
 
         // we need to resolve stylist first since it will need to drive our layout bits
@@ -126,7 +139,7 @@ impl BaseDocument {
             ScrollAnimationState::Fling(fling_state) => {
                 let time_ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_millis() as u64 as f64;
 
                 let time_diff_ms = time_ms - fling_state.last_seen_time;
@@ -158,12 +171,6 @@ impl BaseDocument {
         resolve_layout_children_recursive(self, self.root_node().id);
 
         fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: usize) {
-            // Anonymous blocks and pseudo-elements can be removed from the slab
-            // between render passes. Bail out rather than panicking on a stale key.
-            if doc.nodes.get(node_id).is_none() {
-                return;
-            }
-
             let mut damage = doc.nodes[node_id].damage().unwrap_or(ALL_DAMAGE);
             let _flags = doc.nodes[node_id].flags;
 
@@ -177,7 +184,7 @@ impl BaseDocument {
                 for child_id in layout_children.iter().copied() {
                     resolve_layout_children_recursive(doc, child_id);
                     doc.nodes[child_id].layout_parent.set(Some(node_id));
-                    if let Some(mut data) = doc.nodes[child_id].stylo_element_data.get_mut() {
+                    if let Some(data) = doc.nodes[child_id].stylo_element_data.get_mut() {
                         data.damage
                             .remove(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                     }
@@ -192,12 +199,8 @@ impl BaseDocument {
                 //if damage.contains(CONSTRUCT_DESCENDENT) {
                 let layout_children = doc.nodes[node_id].layout_children.borrow_mut().take();
                 if let Some(layout_children) = layout_children {
+                    // Recurse into previously computed layout children
                     for child_id in layout_children.iter().copied() {
-                        // Anonymous blocks and pseudo-elements can be removed from the
-                        // slab between render passes; skip stale IDs.
-                        if !doc.nodes.contains(child_id) {
-                            continue;
-                        }
                         resolve_layout_children_recursive(doc, child_id);
                         doc.nodes[child_id].layout_parent.set(Some(node_id));
                     }
@@ -238,7 +241,14 @@ impl BaseDocument {
                     #[cfg(feature = "parallel-construct")]
                     let mut font_ctx = self
                         .thread_font_contexts
-                        .get_or(|| RefCell::new(Box::new(self.font_ctx.lock().unwrap().clone())))
+                        .get_or(|| {
+                            RefCell::new(Box::new(
+                                self.font_ctx
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .clone(),
+                            ))
+                        })
                         .borrow_mut();
                     #[cfg(feature = "parallel-construct")]
                     let font_ctx_mut = &mut *font_ctx;
@@ -246,7 +256,8 @@ impl BaseDocument {
                     #[cfg(not(feature = "parallel-construct"))]
                     let layout_ctx_mut = &mut self.layout_ctx;
                     #[cfg(not(feature = "parallel-construct"))]
-                    let font_ctx_mut = &mut *self.font_ctx.lock().unwrap();
+                    let font_ctx_mut =
+                        &mut *self.font_ctx.lock().unwrap_or_else(|e| e.into_inner());
 
                     layout.content_widths = None;
                     build_inline_layout_into(
@@ -263,11 +274,15 @@ impl BaseDocument {
                         LAYOUT_CTX.set(Some(layout_ctx));
                     }
 
-                    // If layout doesn't contain any inline boxes, then it is safe to populate the content_widths
-                    // cache during this parallelized stage.
-                    // if layout.layout.inline_boxes().is_empty() {
-                    //     layout.content_widths();
-                    // }
+                    // Pre-populate the content_widths cache. When there are no inline boxes,
+                    // this is trivially safe and saves a Parley call during layout. When there
+                    // ARE inline boxes, their sizes are not yet set (box sizing happens during
+                    // compute_inline_layout_inner), so the cached widths may be stale — they
+                    // will be recomputed on first access during layout. Only cache when no
+                    // inline boxes are present (pure text runs) where box sizes are irrelevant.
+                    if layout.layout.inline_boxes().is_empty() {
+                        layout.content_widths();
+                    }
 
                     ConstructionTaskResult {
                         node_id: task.node_id,
@@ -281,10 +296,9 @@ impl BaseDocument {
             match result.data {
                 ConstructionTaskResultData::InlineLayout(layout) => {
                     self.nodes[result.node_id].cache.clear();
-                    self.nodes[result.node_id]
-                        .element_data_mut()
-                        .unwrap()
-                        .inline_layout_data = Some(layout);
+                    if let Some(elem) = self.nodes[result.node_id].element_data_mut() {
+                        elem.inline_layout_data = Some(layout);
+                    }
                 }
             }
         }
@@ -304,7 +318,15 @@ impl BaseDocument {
             height: AvailableSpace::Definite(size.height.to_f32_px()),
         };
 
-        let root_element_id = taffy::NodeId::from(self.root_element().id);
+        // D-2c-followup: propagate the `Option<&Node>` widening; the early
+        // guard above guarantees this `unwrap_or(0)` is unreachable, but the
+        // compiler won't let us call `.id` on `Option<&Node>` anymore.
+        debug_assert!(
+            self.root_element().is_some(),
+            "resolve_layout: 'no DOM' guard above lost its effect — root_element became None when an element child was expected"
+        );
+        let root_element_id =
+            taffy::NodeId::from(self.root_element().map(|r| r.id).unwrap_or(0));
 
         // println!("\n\nRESOLVE LAYOUT\n===========\n");
 

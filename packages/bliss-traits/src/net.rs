@@ -3,13 +3,13 @@
 pub use bytes::Bytes;
 pub use http::{self, HeaderMap, Method};
 use serde::{
-    ser::{SerializeSeq, SerializeTuple},
     Serialize,
+    ser::{SerializeSeq, SerializeTuple},
 };
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::{ops::Deref, path::PathBuf};
 pub use url::Url;
@@ -48,7 +48,7 @@ impl<F: Fn(usize) + Send + Sync + 'static> NetWaker for F {
 pub struct Request {
     pub url: Url,
     pub method: Method,
-    pub content_type: Option<String>,
+    pub content_type: String,
     pub headers: HeaderMap,
     pub body: Body,
     pub signal: Option<AbortSignal>,
@@ -60,7 +60,7 @@ impl Request {
         Self {
             url,
             method: Method::GET,
-            content_type: None,
+            content_type: String::new(),
             headers: HeaderMap::new(),
             body: Body::Empty,
             signal: None,

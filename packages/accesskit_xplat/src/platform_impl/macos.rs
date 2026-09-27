@@ -7,7 +7,7 @@ use accesskit_macos::SubclassingAdapter;
 use raw_window_handle::RawWindowHandle;
 
 pub struct Adapter {
-    adapter: SubclassingAdapter,
+    inner: Option<SubclassingAdapter>,
 }
 
 impl Adapter {
@@ -19,23 +19,27 @@ impl Adapter {
     ) -> Self {
         let view = match window_handle {
             RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr(),
-            RawWindowHandle::UiKit(_) => unimplemented!(),
+            // UIKit handles are not supported — accessibility silently disabled.
+            RawWindowHandle::UiKit(_) => return Self { inner: None },
             _ => unreachable!(),
         };
-
-        let adapter = unsafe { SubclassingAdapter::new(view, activation_handler, action_handler) };
-        Self { adapter }
+        let inner = unsafe { SubclassingAdapter::new(view, activation_handler, action_handler) };
+        Self { inner: Some(inner) }
     }
 
     pub fn update_if_active(&mut self, updater: impl FnOnce() -> TreeUpdate) {
-        if let Some(events) = self.adapter.update_if_active(updater) {
-            events.raise();
+        if let Some(inner) = &mut self.inner {
+            if let Some(events) = inner.update_if_active(updater) {
+                events.raise();
+            }
         }
     }
 
     pub fn set_focus(&mut self, is_focused: bool) {
-        if let Some(events) = self.adapter.update_view_focus_state(is_focused) {
-            events.raise();
+        if let Some(inner) = &mut self.inner {
+            if let Some(events) = inner.update_view_focus_state(is_focused) {
+                events.raise();
+            }
         }
     }
 

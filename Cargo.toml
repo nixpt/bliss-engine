@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "packages/accesskit_xplat",
-    "packages/debug_timer",
     "packages/bliss-traits",
     "packages/bliss-dom",
     "packages/bliss-html",
@@ -10,136 +9,124 @@ members = [
     "packages/bliss-shell",
     "packages/bliss",
     "packages/stylo_taffy",
+    "packages/anyrender_vello",
 ]
 exclude = ["sites"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0-alpha.4"
+version = "0.3.0"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/nixpt/bliss-engine"
 repository = "https://github.com/nixpt/bliss-engine"
 categories = ["gui"]
 edition = "2024"
-rust-version = "1.89.0"
+rust-version = "1.85.0"
 
 [workspace.dependencies]
-# Bliss dependencies (in-repo)
-bliss = { version = "=0.3.0-alpha.4", path = "./packages/bliss" }
-bliss-dom = { version = "=0.3.0-alpha.4", path = "./packages/bliss-dom", default-features = false }
-bliss-html = { version = "=0.3.0-alpha.4", path = "./packages/bliss-html", default-features = false }
-bliss-net = { version = "=0.3.0-alpha.4", path = "./packages/bliss-net", default-features = false }
-bliss-paint = { version = "=0.3.0-alpha.4", path = "./packages/bliss-paint", default-features = false }
-bliss-shell = { version = "=0.3.0-alpha.4", path = "./packages/bliss-shell", default-features = false }
-bliss-traits = { version = "=0.3.0-alpha.4", path = "./packages/bliss-traits", default-features = false }
-stylo_taffy = { version = "=0.3.0-alpha.4", path = "./packages/stylo_taffy", default-features = false }
-debug_timer = { version = "0.1.2", path = "./packages/debug_timer" }
-accesskit_xplat = { version = "0.1", path = "./packages/accesskit_xplat", default-features = false }
+# BLISS-HOME-1 (s506): content-synced from nixpt/arniko @ 8bc8541
+# (branch agent/vega/ARNIKO-license-fixes) — the current, actively-developed
+# source of truth for these crates. The dependency versions below are
+# arniko's pins, NOT bliss-engine's pre-sync pins (which had drifted to much
+# newer majors — stylo 0.17, taffy experimental-cache-fix, parley 0.9,
+# anyrender 0.10, wgpu 29 — against code that was never updated to match).
+# Bringing the code in without also bringing its actual dependency graph
+# would not compile.
+bliss = { path = "./packages/bliss", version = "0.3.0", package = "arniko-bliss" }
+bliss-dom = { path = "./packages/bliss-dom", version = "0.3.0", default-features = false }
+bliss-html = { path = "./packages/bliss-html", version = "0.3.0", default-features = false }
+bliss-net = { path = "./packages/bliss-net", version = "0.3.0", default-features = false }
+bliss-paint = { path = "./packages/bliss-paint", version = "0.3.0", default-features = false }
+bliss-shell = { path = "./packages/bliss-shell", version = "0.3.0", default-features = false }
+bliss-traits = { path = "./packages/bliss-traits", version = "0.3.0", default-features = false }
+stylo_taffy = { path = "./packages/stylo_taffy", version = "0.3.0", package = "bliss-stylo-taffy", default-features = false }
+# debug_timer: our copy is a cosmetic-only fork of nicoburns' published
+# debug_timer 0.1.3 (one import-order diff, confirmed by diffing against the
+# fetched crates.io tarball) — depend on the upstream crate directly rather
+# than republishing an identical copy under a new name.
+debug_timer = { version = "0.1.3" }
+# accesskit_xplat: our copy is a GENUINE fork (graceful UiKit/WinRT fallback
+# instead of unimplemented!(), hardened Android JNI thread attach — confirmed
+# by diffing against the fetched crates.io tarball). Needs its own bliss-*
+# name to publish; `bliss-accesskit-xplat` is free on crates.io as of this
+# commit. `package =` keeps the in-repo `accesskit_xplat` import path working.
+accesskit_xplat = { path = "./packages/accesskit_xplat", version = "0.3.0", package = "bliss-accesskit-xplat", default-features = false }
+# anyrender_vello: our copy is a GENUINE fork (SceneOverlay/set_scene_effects
+# mustang hooks, most of the divergence in window_renderer.rs — confirmed by
+# diffing against the fetched crates.io tarball for 0.7.1). Needs its own
+# bliss-* name; `bliss-anyrender-vello` is free on crates.io as of this
+# commit. `package =` keeps the in-repo `anyrender_vello` import path working.
+anyrender_vello = { path = "./packages/anyrender_vello", version = "0.3.0", package = "bliss-anyrender-vello" }
 
-# Servo dependencies
-style = { version = "0.17.0", package = "stylo" }
-style_traits = { version = "0.17.0", package = "stylo_traits" }
-style_atoms = { version = "0.17.0", package = "stylo_atoms" }
-style_config = { version = "0.17.0", package = "stylo_static_prefs" }
-style_dom = { version = "0.17.0", package = "stylo_dom" }
-selectors = { version = "0.38.0", package = "selectors" }
-cssparser = { version = "0.37.0" }
-
-# HTML5ever dependencies
-markup5ever = "0.39.0" # needs to match stylo web_atoms version
-html5ever = "0.39.0"   # needs to match stylo web_atoms version
-xml5ever = "0.39.0"    # needs to match stylo web_atoms version
-
-# Other Servo dependencies
+# Servo / Stylo
+style = { version = "0.11.0", package = "stylo" }
+style_traits = { version = "0.11.0", package = "stylo_traits" }
+style_atoms = { version = "0.11.0", package = "stylo_atoms" }
+style_config = { version = "0.11.0", package = "stylo_config" }
+style_dom = { version = "0.11.0", package = "stylo_dom" }
+selectors = { version = "0.35.0" }
+cssparser = { version = "0.36" }
+markup5ever = "0.37.0"
+html5ever = "0.37.0"
+xml5ever = "0.37.0"
 euclid = "0.22"
 atomic_refcell = "0.1.13"
 app_units = "0.7.5"
 smallvec = "1"
 
-# Taffy + Parley + Fontations
-taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = [
-    "std",
-    "flexbox",
-    "grid",
-    "block_layout",
-    "content_size",
-    "calc",
-    "detailed_layout_info",
+# DioxusLabs Taffy
+taffy = { version = "0.11", default-features = false, features = [
+    "std", "flexbox", "grid", "block_layout", "content_size", "calc", "detailed_layout_info",
 ] }
-parley = { version = "0.9", default-features = false, features = ["std"] }
-skrifa = { version = "0.42", default-features = false, features = [
-    "std",
-] } # Should match parley and vello versions
 
-# AnyRender
-anyrender = { version = "0.10.0" }
-anyrender_serialize = { version = "0.3.0" }
-anyrender_skia = { version = "0.8.0" }
-anyrender_vello = { version = "0.10.1" }
-anyrender_vello_cpu = { version = "0.12.1" }
-anyrender_vello_hybrid = { version = "0.5.1" }
-anyrender_svg = { version = "0.11.0" }
-wgpu_context = { version = "0.6.0" }
+# Linebender Parley
+parley = { version = "0.10", default-features = false, features = ["std"] }
 
-# Linebender + Fontations + WGPU + SVG
-color = "0.3"
-linebender_resource_handle = "0.1"
+# GPU / rendering
+anyrender = "0.7"
+anyrender_svg = "0.8"
+wgpu = "27"
+vello = { version = "0.7", features = ["wgpu"] }
+wgpu_context = "0.3"
 peniko = "0.6.0"
-kurbo = "0.13.1"
-wgpu = "29"
+kurbo = "0.13"
+skrifa = { version = "0.40", default-features = false, features = ["std"] }
+color = "0.3.2"
+linebender_resource_handle = "0.1"
 usvg = "0.46"
+pollster = "0.4"
+rustc-hash = "2"
 
-# Windowing & Input
-raw-window-handle = "0.6.0"
+# Windowing & input
 winit = { version = "=0.31.0-beta.2" }
+raw-window-handle = { version = "0.6.2", features = ["std"] }
 accesskit = "0.24"
-arboard = { version = "3.4.1", default-features = false }
-rfd = { version = "0.17.1", default-features = false }
 keyboard-types = "0.7"
 cursor-icon = "1"
+arboard = { version = "3.4.1", default-features = false }
+rfd = { version = "0.17.1", default-features = false }
 
-# IO & Networking
+# Networking
+tokio = { version = "1.42", features = ["rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false }
+reqwest-middleware = { version = "0.4", default-features = false }
+http-cache-reqwest = { version = "0.15", default-features = false }
 url = "2.5.0"
 http = "1.1.0"
 data-url = "0.3.1"
-tokio = "1.42"
-reqwest = { version = "0.13", default-features = false }
-reqwest-middleware = { version = "0.5.1", default-features = false }
-http-cache-reqwest = { version = "=1.0.0-alpha.6", default-features = false }
-http-cache = { version = "=1.0.0-alpha.6", default-features = false }
-
-# Media & Decoding
-image = { version = "=0.25.6", default-features = false }
-wuff = "0.2"
-html-escape = "0.2.13"
-percent-encoding = "2.3.1"
-png = "0.18"
-serde = "1"
-
-# Webbrowser helper
-webbrowser = "1.0"
+bytes = "1.7.1"
 directories = "6.0.0"
 
-# WASM
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-tracing-wasm = "0.2.1"
-web-sys = "0.3.98"
-web-time = "1"
-console_error_panic_hook = "0.1"
-
-# Other dependencies
-rustc-hash = "2.1.2"
-bytes = "1.7.1"
-slab = "0.4.9"
+# Misc
+serde = "1"
+serde_json = "1"
+anyhow = "1.0"
 tracing = "0.1.40"
-tracing-subscriber = "0.3"
 futures-util = "0.3.30"
-futures-intrusive = "0.5.0"
-pollster = "0.4"
-smol_str = "0.3"
 bitflags = "2.8.0"
-bytemuck = "1"
+slab = "0.4.9"
+image = { version = "0.25", default-features = false }
+smol_str = "0.3"
 rayon = "1"
 thread_local = "1"
 
@@ -173,79 +160,7 @@ panic = "unwind"
 inherits = "small"
 opt-level = "z"
 
-[profile.tiny.package.fearless_simd]
-opt-level = 3
-[profile.tiny.package.vello_cpu]
-opt-level = 3
 [profile.tiny.package.taffy]
-opt-level = 3
-[profile.tiny.package.harfrust]
 opt-level = 3
 [profile.tiny.package.skrifa]
 opt-level = 3
-
-# This is a "virtual package"
-# It is not meant to be published, but is used so "cargo run --example XYZ" works properly
-[package]
-name = "bliss-examples"
-version = "0.0.1"
-authors = ["Jonathan Kelley"]
-edition = "2024"
-description = "Top level crate for Bliss"
-license = "MIT OR Apache-2.0"
-keywords = ["dom", "ui", "gui", "react", "wasm"]
-rust-version = "1.89.0"
-publish = false
-
-[dev-dependencies]
-anyrender = { workspace = true }
-anyrender_vello = { workspace = true }
-anyrender_vello_cpu = { workspace = true, features = ["multithreading"] }
-anyrender_vello_hybrid = { workspace = true }
-bliss-dom = { workspace = true, features = ["default"] }
-bliss-html = { workspace = true }
-bliss-traits = { workspace = true }
-bliss-paint = { workspace = true }
-bliss-shell = { workspace = true }
-bliss-net = { workspace = true }
-bliss = { workspace = true, features = ["net"] }
-euclid = { workspace = true }
-reqwest = { workspace = true }
-tokio = { workspace = true, features = ["macros"] }
-image = { workspace = true }
-png = { workspace = true }
-peniko = { workspace = true }
-color = { workspace = true }
-boa_engine = "0.20.0"
-env_logger = "0.11"
-tracing-subscriber = "0.3"
-
-# [patch.crates-io]
-# anyrender = { path = "../anyrender/crates/anyrender" }
-# anyrender_skia = { path = "../anyrender/crates/anyrender_skia" }
-# anyrender_vello = { path = "../anyrender/crates/anyrender_vello" }
-# anyrender_vello_cpu = { path = "../anyrender/crates/anyrender_vello_cpu" }
-# anyrender_vello_hybrid = { path = "../anyrender/crates/anyrender_vello_hybrid" }
-# anyrender_svg = { path = "../anyrender/crates/anyrender_svg" }
-# wgpu_context = { path = "../anyrender/crates/wgpu_context" }
-
-# vello = { path = "../vello/vello" }
-# vello_cpu = { path = "../vello/sparse_strips/vello_cpu" }
-# vello_hybrid = { path = "../vello/sparse_strips/vello_hybrid" }
-# vello_common = { path = "../vello/sparse_strips/vello_common" }
-
-# [patch.crates-io]
-# style = { path = "../stylo/style", package = "stylo" }
-# style_traits = { path = "../stylo/style_traits", package = "stylo_traits" }
-# style_atoms = { path = "../stylo/stylo_atoms", package = "stylo_atoms" }
-# style_config = { path = "../stylo/stylo_config", package = "stylo_config" }
-# style_dom = { path = "../stylo/stylo_dom", package = "stylo_dom" }
-# selectors = { path = "../stylo/selectors", package = "selectors" }
-
-# [patch.crates-io]
-# [patch."https://github.com/dioxuslabs/taffy"]
-# taffy = { path = "../taffy" }
-
-# [patch."https://github.com/linebender/parley"]
-# parley = { path = "../parley/parley" }
-# fontique = { path = "../parley/fontique" }

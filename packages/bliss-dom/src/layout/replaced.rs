@@ -93,19 +93,19 @@ pub fn replaced_measure_function(
             let content_box_known_dimensions = known_dimensions.maybe_sub(pb_sum);
             break 'size content_box_known_dimensions
                 .maybe_apply_aspect_ratio(Some(aspect_ratio))
-                .map(|s| s.unwrap());
+                .map(|s| s.unwrap_or(0.0));
         }
 
         if style_size.width.is_some() | style_size.height.is_some() {
             break 'size style_size
                 .maybe_apply_aspect_ratio(Some(aspect_ratio))
-                .map(|s| s.unwrap());
+                .map(|s| s.unwrap_or(0.0));
         }
 
         if attr_size.width.is_some() | attr_size.height.is_some() {
             break 'size attr_size
                 .maybe_apply_aspect_ratio(Some(aspect_ratio))
-                .map(|s| s.unwrap());
+                .map(|s| s.unwrap_or(0.0));
         }
 
         inherent_size
@@ -114,18 +114,25 @@ pub fn replaced_measure_function(
     // Floor size at zero
     let size = unclamped_size.map(|s| s.max(0.0));
 
+    // Safe defaults matching the violation check guards below.
+    // If a min/max value is unspecified, the violation check falls through
+    // to Violation::None, so these branches are never reached with None.
+    // We use unwrap_or defensively so future refactors don't introduce panics.
+    const NO_MIN: f32 = 0.0;
+    const NO_MAX: f32 = f32::INFINITY;
+
     // Violations
-    let width_violation = if size.width < min_size.width.unwrap_or(0.0) {
+    let width_violation = if size.width < min_size.width.unwrap_or(NO_MIN) {
         Violation::Min
-    } else if size.width > max_size.width.unwrap_or(f32::INFINITY) {
+    } else if size.width > max_size.width.unwrap_or(NO_MAX) {
         Violation::Max
     } else {
         Violation::None
     };
 
-    let height_violation = if size.height < min_size.height.unwrap_or(0.0) {
+    let height_violation = if size.height < min_size.height.unwrap_or(NO_MIN) {
         Violation::Min
-    } else if size.height > max_size.height.unwrap_or(f32::INFINITY) {
+    } else if size.height > max_size.height.unwrap_or(NO_MAX) {
         Violation::Max
     } else {
         Violation::None
@@ -138,7 +145,7 @@ pub fn replaced_measure_function(
         (Violation::None, Violation::None) => size,
         // w > max-width
         (Violation::Max, Violation::None) => {
-            let max_width = max_size.width.unwrap();
+            let max_width = max_size.width.unwrap_or(NO_MAX);
             Size {
                 width: max_width,
                 height: (max_width * inv_aspect_ratio).maybe_max(min_size.height),
@@ -146,7 +153,7 @@ pub fn replaced_measure_function(
         }
         // w < min-width
         (Violation::Min, Violation::None) => {
-            let min_width = min_size.width.unwrap();
+            let min_width = min_size.width.unwrap_or(NO_MIN);
             Size {
                 width: min_width,
                 height: (min_width * inv_aspect_ratio).maybe_min(max_size.height),
@@ -154,7 +161,7 @@ pub fn replaced_measure_function(
         }
         // h > max-height
         (Violation::None, Violation::Max) => {
-            let max_height = max_size.height.unwrap();
+            let max_height = max_size.height.unwrap_or(NO_MAX);
             Size {
                 width: (max_height * aspect_ratio).maybe_max(min_size.width),
                 height: max_height,
@@ -162,7 +169,7 @@ pub fn replaced_measure_function(
         }
         // h < min-height
         (Violation::None, Violation::Min) => {
-            let min_height = min_size.height.unwrap();
+            let min_height = min_size.height.unwrap_or(NO_MIN);
             Size {
                 width: (min_height * aspect_ratio).maybe_min(max_size.width),
                 height: min_height,
@@ -170,8 +177,8 @@ pub fn replaced_measure_function(
         }
         // (w > max-width) and (h > max-height)
         (Violation::Max, Violation::Max) => {
-            let max_width = max_size.width.unwrap();
-            let max_height = max_size.height.unwrap();
+            let max_width = max_size.width.unwrap_or(NO_MAX);
+            let max_height = max_size.height.unwrap_or(NO_MAX);
             if max_width / size.width <= max_height / size.height {
                 Size {
                     width: max_width,
@@ -186,8 +193,8 @@ pub fn replaced_measure_function(
         }
         // (w < min-width) and (h < min-height)
         (Violation::Min, Violation::Min) => {
-            let min_width = min_size.width.unwrap();
-            let min_height = min_size.height.unwrap();
+            let min_width = min_size.width.unwrap_or(NO_MIN);
+            let min_height = min_size.height.unwrap_or(NO_MIN);
             if min_width / size.width <= min_height / size.height {
                 Size {
                     width: (min_height * aspect_ratio).maybe_min(max_size.width),
@@ -202,17 +209,17 @@ pub fn replaced_measure_function(
         }
         // (w < min-width) and (h > max-height)
         (Violation::Min, Violation::Max) => {
-            let min_width = min_size.width.unwrap();
-            let max_height = max_size.height.unwrap();
+            let min_width = min_size.width.unwrap_or(NO_MIN);
+            let max_height = max_size.height.unwrap_or(NO_MAX);
             Size {
                 width: min_width,
                 height: max_height,
             }
         }
-        // (w < min-width) and (h > max-height)
+        // (w > max-width) and (h < min-height)
         (Violation::Max, Violation::Min) => {
-            let max_width = max_size.width.unwrap();
-            let min_height = min_size.height.unwrap();
+            let max_width = max_size.width.unwrap_or(NO_MAX);
+            let min_height = min_size.height.unwrap_or(NO_MIN);
             Size {
                 width: max_width,
                 height: min_height,

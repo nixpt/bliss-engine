@@ -1,32 +1,26 @@
 //! The core DOM abstraction in Bliss
 //!
-//! This crate implements a flexible headless DOM ([`BaseDocument`]), which is designed to emebedded in and "driven" by external code. Most users will want
-//! to use a wrapper:
+//! This crate implements a flexible headless DOM ([`BaseDocument`]), designed to be embedded in and driven by external code.
+//! Most users will want to use a wrapper:
 //!
-//!  - [`HtmlDocument`](https://docs.rs/bliss-html/latest/bliss_html/struct.HtmlDocument.html) from the [bliss-html](https://docs.rs/bliss-html) crate.
-//!    Allows you to parse HTML (or XHTML) into a Bliss [`BaseDocument`], and can be combined with a markdown-to-html converter like [comrak](https://docs.rs/comrak)
-//!    or [pulldown-cmark](https://docs.rs/pulldown-cmark) to render/process markdown.
-//!  - [`DioxusDocument`](https://docs.rs/dioxus-native/latest/dioxus_native/struct.DioxusDocument.html) from the [dioxus-native](https://docs.rs/dioxus-native) crate.
-//!    Combines a [`BaseDocument`] with a Dioxus `VirtualDom` to enable dynamic rendering and event handling.
+//! - [`HtmlDocument`](https://docs.rs/bliss-html/latest/bliss_html/struct.HtmlDocument.html) from [bliss-html](https://docs.rs/bliss-html) — parse HTML into a `BaseDocument`
+//! - [`DioxusDocument`](https://docs.rs/dioxus-native/latest/dioxus_native/struct.DioxusDocument.html) from [dioxus-native](https://docs.rs/dioxus-native) — dynamic rendering with Dioxus
 //!
-//! It includes: A DOM tree respresentation, CSS parsing and resolution, layout and event handling. Additional functionality is available in
-//! separate crates, including html parsing ([bliss-html](https://docs.rs/bliss-html)), networking ([bliss-net](https://docs.rs/bliss-html)),
-//! rendering ([bliss-paint](https://docs.rs/bliss-paint)) and windowing ([bliss-shell](https://docs.rs/bliss-shell)).
+//! This crate provides: DOM tree construction and mutation, CSS parsing and style resolution,
+//! layout computation (via taffy), text layout (via parley), event handling, form submission,
+//! script execution, text selection, and URL resolution.
 //!
-//! Most of the functionality in this crates is provided through the  struct.
+//! Companion crates: [bliss-html](https://docs.rs/bliss-html) (parsing), [bliss-net](https://docs.rs/bliss-net) (networking),
+//! [bliss-paint](https://docs.rs/bliss-paint) (rendering), [bliss-shell](https://docs.rs/bliss-shell) (windowing).
 //!
-//! `bliss-dom` has a native Rust API that is designed for higher-level abstractions to be built on top (although it can also be used directly).
+//! ## Feature Flags
 //!
-//! The goal behind this crate is that any implementor can interact with the DOM and render it out using any renderer
-//! they want.
-//!
-
-#![allow(clippy::collapsible_if)]
-
-// TODO: Document features
-// ## Feature flags
-//  - `default`: Enables the features listed below.
-//  - `tracing`: Enables tracing support.
+//! - `tracing`: Enable `tracing` spans for performance instrumentation
+//! - `incremental`: Enable incremental layout with damage propagation (default: full relayout)
+//! - `parallel-construct`: Parallelize inline layout construction with rayon
+//! - `accessibility`: Enable accessibility tree support
+//! - `file_input`: Enable file upload form controls
+//! - `serde`: Enable serialization support
 
 pub const DEFAULT_CSS: &str = include_str!("../assets/default.css");
 pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
@@ -34,50 +28,152 @@ pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
 const INCREMENTAL: bool = cfg!(feature = "incremental");
 const NON_INCREMENTAL: bool = !INCREMENTAL;
 
-/// The DOM implementation.
+/// The core DOM implementation: [`BaseDocument`], [`DocGuard`], [`DocGuardMut`], [`Document`], [`PlainDocument`].
 ///
-/// This is the primary entry point for this crate.
+/// `BaseDocument` manages the node tree, style system, layout state, event handlers,
+/// and all cross-cutting concerns. Most of the high-level APIs live as methods on this struct.
 mod document;
 
-/// The nodes themsleves, and their data.
+/// DOM node types: [`Node`], [`NodeData`], [`ElementData`], [`Attribute`], [`TextNodeData`].
+///
+/// Nodes are stored in [`BaseDocument`]'s arena and referenced by `usize` IDs.
+/// `ElementData` holds tag names, attributes, computed styles, layout state, and inline text data.
 pub mod node;
 
+/// Document construction options: [`DocumentConfig`].
+///
+/// Controls viewport, base URL, user-agent stylesheets, font context, and provider
+/// implementations for networking, navigation, shell, and HTML parsing.
 mod config;
+/// Debug and inspection utilities: `print_taffy_tree`, `debug_log_node`.
+///
+/// Methods on [`BaseDocument`] for dumping layout trees, inline content,
+/// and node metadata to stdout for debugging purposes.
 mod debug;
+/// Policy-based DOM controller: [`PolicyDomController`].
+///
+/// Provides sandboxing and security restrictions on DOM mutations.
+/// Used to enforce content-security policies and prevent unauthorized
+/// script-driven modifications.
+mod dom_control;
+/// DOM event system: [`EventDriver`], [`EventHandler`], [`NoopEventHandler`].
+///
+/// Sub-modules:
+/// - `driver`: Event dispatch and lifecycle
+/// - `focus`: Focus management (tab navigation, focusin/focusout)
+/// - `keyboard`: Keyboard event handling
+/// - `pointer`: Pointer/mouse/touch event handling
+/// - `ime`: Input method editor composition events
 mod events;
+/// Font metrics resolution for text measurement.
+///
+/// Caches parley `FontMetrics` per font family and style, used during
+/// inline layout construction to size text runs accurately.
 mod font_metrics;
-pub mod form;
+/// HTML form submission: form data construction, encoding, and navigation.
+///
+/// Implements the [form submission algorithm](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm)
+/// including form data set construction, URL-encoded and multipart encoding,
+/// and navigation to the action URL.
+mod form;
+/// HTML parsing trait: [`HtmlParserProvider`], [`DummyHtmlParserProvider`].
+///
+/// Allows pluggable parsing of `innerHTML` into the DOM tree.
+/// The `DummyHtmlParserProvider` is a no-op placeholder; real parsing
+/// comes from [bliss-html](https://docs.rs/bliss-html).
 mod html;
-/// Integration of taffy and the DOM.
+/// Layout tree construction, computation, and damage tracking.
+///
+/// Sub-modules:
+/// - `construct`: Builds the layout tree (inline layout, anonymous blocks, layout children)
+/// - `damage`: Damage flags for incremental layout
+/// - `inline`: Inline/block layout via parley
+/// - `list`: List-item marker generation
+/// - `replaced`: Replaced element sizing (images, canvas)
+/// - `table`: Table layout integration
+///
+/// Uses [taffy](https://docs.rs/taffy) as the block/flex/grid layout engine.
 mod layout;
+/// High-level DOM mutation API: [`DocumentMutator`].
+///
+/// Provides safe, ergonomic methods for creating, inserting, moving, and removing nodes,
+/// setting attributes, managing inline styles, and handling form control state.
+/// Acquired via [`BaseDocument::mutate()`].
 mod mutator;
+/// CSS selector matching: `querySelector` / `querySelectorAll`.
+///
+/// Finds elements in the DOM tree matching a CSS selector string,
+/// using Servo's `selectors` crate for parsing and matching.
 mod query_selector;
+/// Style resolution and layout computation pipeline.
+///
+/// Orchestrates: message processing → scroll animation → style resolution →
+/// damage propagation → layout children construction → deferred tasks →
+/// style-to-taffy flush → layout computation → damage clearing.
+///
+/// Entry point: [`BaseDocument::resolve()`].
 mod resolve;
-mod selection;
-/// Script engine abstraction
+/// Script engine abstraction: [`ScriptEngine`], [`NoopScriptEngine`], [`BoxedScriptEngine`].
+///
+/// Provides a pluggable interface for running JavaScript or other scripting languages
+/// in a sandboxed execution context. The `NoopScriptEngine` is the default placeholder.
 mod script;
-/// Implementations that interact with servo's style engine
+/// Text selection state for non-input elements.
+///
+/// Tracks anchor/focus endpoints across inline roots, including anonymous blocks
+/// whose IDs may change across layout reconstructions. Used by event handling
+/// to implement click-to-select and drag-to-extend.
+mod selection;
+/// Integration with Servo's style engine (stylo).
+///
+/// Bridges Servo's CSS selector matching, property declaration resolution,
+/// and cascade logic into bliss-dom's node system. Provides the computed
+/// style data used by layout.
 mod stylo;
+/// Conversion from Servo's `cursor` CSS property values to system cursor icons.
+///
+/// Maps CSS cursor keywords (pointer, text, grab, etc.) to
+/// platform-specific cursor representations for [`bliss-shell`].
 mod stylo_to_cursor_icon;
-mod stylo_to_kurbo;
+/// Conversion from Servo's computed styles to parley's text layout styles.
+///
+/// Translates CSS font properties (font-family, size, weight, style, letter-spacing,
+/// line-height, text-decoration, etc.) into parley's `Style` and `StyleProperty` types
+/// for text layout and shaping.
 mod stylo_to_parley;
+/// DOM tree traversal utilities: [`TreeTraverser`], [`AncestorTraverser`].
+///
+/// Provides iterators for pre-order DOM traversal, ancestor chain walking,
+/// document-order comparison, inline-root collection across anonymous blocks,
+/// and subtree mutation iteration.
 mod traversal;
 
+/// Engine tests
+#[cfg(test)]
+mod tests;
+/// Document URL resolution and Servo `UrlExtraData` integration.
+///
+/// Wraps `url::Url` in a thread-safe `ServoArc` for use by Servo's style system.
+/// Provides relative URL resolution for `<a href>`, `<img src>`, `@import`, etc.
 mod url;
 
-pub use stylo_to_kurbo::resolve_2d_transform;
-
+/// Networking and resource loading.
+///
+/// Types for HTTP requests, resource handling (CSS, images, fonts),
+/// and the [`StylesheetHandler`] that loads external stylesheets.
+/// Requires the `net` provider configured in [`DocumentConfig`].
 pub mod net;
+/// Shared utility types.
+///
+/// Exports [`Point`] and other geometry primitives used across the bliss crate family.
 pub mod util;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
-#[cfg(feature = "custom-widget")]
-pub use crate::node::Widget;
-
-pub use config::{DocumentConfig, StyleThreading};
+pub use config::DocumentConfig;
 pub use document::{BaseDocument, DocGuard, DocGuardMut, Document, PlainDocument};
+pub use dom_control::PolicyDomController;
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,
     namespace_prefix, namespace_url, ns,
@@ -91,42 +187,7 @@ pub use script::{
 };
 pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
-pub use style::media_queries::MediaType;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
 pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
-pub use util::{Point, decode_font_bytes};
-pub use form::RequestContentType;
-
-/// Convenience builder for the one-font case: produces a [`FontContext`] with
-/// system-font discovery disabled and the supplied font registered as the
-/// fallback for every generic family. The standard setup for WASM, where
-/// browsers don't expose system fonts. WOFF/WOFF2 inputs are decoded
-/// automatically.
-pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
-    use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
-    use std::sync::Arc;
-
-    let mut ctx = FontContext {
-        source_cache: SourceCache::new_shared(),
-        collection: Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: false,
-        }),
-    };
-    let decoded = decode_font_bytes(font_data).into_owned();
-    let registered = ctx
-        .collection
-        .register_fonts(Blob::new(Arc::new(decoded) as _), None);
-    let family_ids: Vec<_> = registered.iter().map(|(id, _)| *id).collect();
-    for generic in [
-        GenericFamily::SansSerif,
-        GenericFamily::Serif,
-        GenericFamily::Monospace,
-        GenericFamily::SystemUi,
-    ] {
-        ctx.collection
-            .append_generic_families(generic, family_ids.iter().copied());
-    }
-    ctx
-}
+pub use util::Point;
