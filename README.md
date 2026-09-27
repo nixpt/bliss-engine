@@ -43,12 +43,14 @@ make build
    ```bash
    cargo build
    ```
-3. Run an example:
+3. Run the tests:
    ```bash
-   cargo run --release --example hello
-   cargo run --release --example dashboard
-   cargo run --release --example react
+   cargo test --workspace
    ```
+
+The crates are also published on crates.io (`bliss-dom`, `bliss-html`,
+`bliss-paint`, `bliss-shell`, `arniko-bliss`, ...) — depend on them from there
+rather than a path into this repo.
 
 ## 📸 Screenshots
 
