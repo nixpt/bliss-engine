@@ -53,6 +53,26 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets
 
+  msrv:
+    # rust-version = 1.89 (workspace.package): smol_str 0.3.4+ (bliss-traits) needs
+    # 1.89, fontique 0.10 needs 1.88. Checked on exactly that toolchain so the
+    # declared MSRV stays true (0.3.0 claimed 1.85, which never built).
+    name: msrv (Rust 1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install apt deps
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
+          version: 1.0
+      - name: cargo check (MSRV)
+        run: cargo check --workspace --all-targets
+
   doc:
     name: cargo doc
     runs-on: ubuntu-latest

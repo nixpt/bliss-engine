@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "arniko-bliss"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bliss-anyrender-vello",
  "bliss-dom",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-accesskit-xplat"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "accesskit_android",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-anyrender-vello"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyrender",
  "debug_timer",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-dom"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "app_units",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-html"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bliss-dom",
  "bliss-traits",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-net"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bliss-traits",
  "data-url",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-paint"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyrender",
  "anyrender_svg",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-shell"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "accesskit",
  "android-activity",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-stylo-taffy"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "stylo",
  "stylo_atoms",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "bliss-traits"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitflags 2.11.1",
  "bytes",
