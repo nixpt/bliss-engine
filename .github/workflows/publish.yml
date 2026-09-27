@@ -51,6 +51,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install apt deps
+        # Same list as ci.yml: the dry run compiles every crate, and
+        # yeslogic-fontconfig-sys / winit / rfd / arboard need these system libs.
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
+          version: 1.0
+
       - name: tag must match every crate's version
         id: ver
         run: |
