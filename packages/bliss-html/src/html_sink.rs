@@ -145,9 +145,14 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
         Self: 'a;
 
     fn finish(self) -> Self::Output {
-        #[cfg(feature = "tracing")]
+        // Never `println!` here: this is a library, and stdout belongs to the
+        // consumer (a stdio JSON-RPC server's protocol channel, a CLI's output,
+        // …). Parse errors go to `tracing` when enabled, stderr otherwise.
         for error in self.errors.borrow().iter() {
-            tracing::error!("{error}");
+            #[cfg(feature = "tracing")]
+            tracing::warn!("bliss-html parse error: {error}");
+            #[cfg(not(feature = "tracing"))]
+            eprintln!("bliss-html parse error: {error}");
         }
     }
 
@@ -274,6 +279,10 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
     fn reparent_children(&self, old_parent_id: &Self::Handle, new_parent_id: &Self::Handle) {
         self.mutr()
             .reparent_children(*old_parent_id, *new_parent_id);
+    }
+
+    fn clone_subtree(&self, target: &Self::Handle) -> Self::Handle {
+        self.mutr().deep_clone_node(*target)
     }
 }
 

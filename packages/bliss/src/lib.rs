@@ -2,12 +2,13 @@
 
 //! Bliss is a modular, embeddable web engine with a native Rust API.
 //!
-//! It powers the Exosphere Browser Engine.
+//! It powers the [`dioxus-native`] UI framework.
 //!
 //! This crate exists to collect the most important functionality for users together in one place.
 //! It does not bring any unique functionality, but rather, it re-exports the relevant crates as modules.
 //! The exported crate corresponding to each module is also available in a stand-alone manner, i.e. [`bliss-dom`] as [`bliss::dom`](crate::dom).
 //!
+//! [`dioxus-native`]: https://docs.rs/dioxus-native
 //! [`bliss-dom`]: https://docs.rs/bliss-dom
 
 use std::sync::Arc;
@@ -40,12 +41,60 @@ pub use bliss_shell as shell;
 /// Re-export of [`bliss_traits`](https://docs.rs/bliss-traits). Base types and traits for interoperability between modules
 pub use bliss_traits as traits;
 
+// ---------------------------------------------------------------------------
+// Convenience re-exports used by cece-code and other downstream consumers
+// ---------------------------------------------------------------------------
+
+pub mod style;
+pub mod element;
+
+/// Keyboard key identifier.
+pub use keyboard_types::Key;
+/// Keyboard modifier flags.
+pub use keyboard_types::Modifiers;
+
+/// A colour value for use with [`style::Style`] and inline CSS.
+///
+/// Supports sRGB colours via the [`Rgb`] and [`Rgba`] variants.  When
+/// serialised to CSS, opaque colours produce `#rrggbb` hex and colours with
+/// alpha produce `rgba(r,g,b,a)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Color {
+    /// RGB colour with all channels 0–255, alpha = 255.
+    Rgb(u8, u8, u8),
+    /// RGBA colour with all channels 0–255.
+    Rgba(u8, u8, u8, u8),
+}
+
+impl Color {
+    /// Create an opaque colour from its red, green and blue components (each 0–255).
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Color::Rgb(r, g, b)
+    }
+
+    /// Create a colour with an alpha (transparency) channel from components (each 0–255).
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Color::Rgba(r, g, b, a)
+    }
+
+    /// Serialise to a CSS colour string.
+    pub fn to_css(&self) -> String {
+        match self {
+            Color::Rgb(r, g, b) | Color::Rgba(r, g, b, 255) => {
+                format!("#{:02x}{:02x}{:02x}", r, g, b)
+            }
+            Color::Rgba(r, g, b, a) => {
+                format!("rgba({},{},{},{:.3})", r, g, b, *a as f32 / 255.0)
+            }
+        }
+    }
+}
+
+// Re-export the builder types at the crate root for ergonomic access.
+pub use element::{Element, Window};
+
 #[cfg(feature = "net")]
-#[cfg(not(target_arch = "wasm32"))]
 pub fn launch_url(url: &str) {
-    // Assert that url is valid
-    #[cfg(feature = "tracing")]
-    tracing::info!("Launching {url}");
     let url = url.to_owned();
     let url = url::Url::parse(&url).expect("Invalid url");
 
@@ -57,9 +106,9 @@ pub fn launch_url(url: &str) {
     let _guard = rt.enter();
 
     let event_loop = create_default_event_loop();
-    let (proxy, reciever) = BlissShellProxy::new(event_loop.create_proxy());
+    let (proxy, receiver) = BlissShellProxy::new(event_loop.create_proxy());
     let net_provider = create_net_provider(proxy.clone());
-    let application = BlissApplication::new(proxy, reciever);
+    let application = BlissApplication::new(proxy, receiver);
 
     let (url, bytes) = rt
         .block_on(net_provider.fetch_async(bliss_traits::net::Request::get(url)))
@@ -85,19 +134,17 @@ pub fn launch_static_html(html: &str) {
 pub fn launch_static_html_cfg(html: &str, cfg: Config) {
     // Turn on the runtime and enter it
     #[cfg(feature = "net")]
-    #[cfg(not(target_arch = "wasm32"))]
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
     #[cfg(feature = "net")]
-    #[cfg(not(target_arch = "wasm32"))]
     let _guard = rt.enter();
 
     let event_loop = create_default_event_loop();
-    let (proxy, reciever) = BlissShellProxy::new(event_loop.create_proxy());
+    let (proxy, receiver) = BlissShellProxy::new(event_loop.create_proxy());
     let net_provider = create_net_provider(proxy.clone());
-    let application = BlissApplication::new(proxy, reciever);
+    let application = BlissApplication::new(proxy, receiver);
 
     launch_internal(html, cfg, event_loop, application, net_provider)
 }
@@ -139,12 +186,8 @@ fn create_net_provider(proxy: BlissShellProxy) -> Arc<EnabledNetProvider> {
     let net_provider = Arc::new(bliss_net::Provider::new(Some(Arc::new(proxy))));
     #[cfg(not(feature = "net"))]
     let net_provider = {
-        use bliss_traits::net::DummyNetProvider;
-
-        // This isn't used without the net feature, so ignore it here to not
-        // get unnused warnings.
-        let _ = event_loop;
-        Arc::new(DummyNetProvider::default())
+        let _ = proxy;
+        Arc::new(bliss_traits::net::DummyNetProvider)
     };
 
     net_provider

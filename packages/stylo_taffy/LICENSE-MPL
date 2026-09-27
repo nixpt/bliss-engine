@@ -1,0 +1,10 @@
+Mozilla Public License Version 2.0
+
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+Note: Only the `stylo_taffy` crate in this workspace is licensed under
+the MPL-2.0 (as an alternative to MIT or Apache-2.0), due to its use of
+Mozilla's Stylo CSS engine. All other crates are licensed under MIT OR
+Apache-2.0. See each crate's Cargo.toml for its specific license.

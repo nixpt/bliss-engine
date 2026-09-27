@@ -12,7 +12,7 @@ use style::{
     data::ElementData as StyloElementData,
     shared_lock::StylesheetGuards,
     values::{
-        computed::{Content, ContentItem, Display, Float, TextTransform},
+        computed::{Content, ContentItem, Display, Float},
         specified::box_::{DisplayInside, DisplayOutside},
     },
 };
@@ -25,7 +25,6 @@ use crate::{
         TextBrush, TextInputData, TextLayout,
     },
     qual_name, stylo_to_parley,
-    traversal::{iter_children, iter_children_and_pseudos},
 };
 
 use super::{damage::ALL_DAMAGE, list::collect_list_item_children, table::build_table_context};
@@ -56,10 +55,7 @@ fn push_children_and_pseudos(layout_children: &mut Vec<usize>, node: &Node) {
     if let Some(before) = node.before {
         layout_children.push(before);
     }
-    layout_children.extend(node.children.iter().copied().filter(|child_id| {
-        let child_node = node.with(*child_id);
-        child_node.data.kind() != NodeKind::Comment
-    }));
+    layout_children.extend_from_slice(&node.children);
     if let Some(after) = node.after {
         layout_children.push(after);
     }
@@ -69,10 +65,12 @@ fn push_non_whitespace_children_and_pseudos(layout_children: &mut Vec<usize>, no
     if let Some(before) = node.before {
         layout_children.push(before);
     }
-    layout_children.extend(node.children.iter().copied().filter(|child_id| {
-        let child_node = node.with(*child_id);
-        !child_node.is_whitespace_node() && child_node.data.kind() != NodeKind::Comment
-    }));
+    layout_children.extend(
+        node.children
+            .iter()
+            .copied()
+            .filter(|child_id| !node.with(*child_id).is_whitespace_node()),
+    );
     if let Some(after) = node.after {
         layout_children.push(after);
     }
@@ -152,15 +150,8 @@ pub(crate) fn collect_layout_children(
                         .special_data = SpecialElementData::Image(Box::new(svg.into()));
                 }
                 Err(err) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(
-                        node_id = container_node_id,
-                        html = outer_html,
-                        error = ?err,
-                        "SVG parse failed",
-                    );
-                    #[cfg(not(feature = "tracing"))]
-                    let _ = err;
+                    eprintln!("{container_node_id} SVG parse failed: {err:?}");
+                    eprintln!("{outer_html}");
                 }
             };
             return;
@@ -211,7 +202,6 @@ pub(crate) fn collect_layout_children(
             doc.nodes[container_node_id].children = children;
         }
         DisplayInside::Flow | DisplayInside::FlowRoot | DisplayInside::TableCell => {
-            // TODO: make "all_inline" detection work in the presence of display:contents nodes
             let mut all_block = true;
             let mut all_inline = true;
             let mut all_out_of_flow = true;
@@ -231,6 +221,56 @@ pub(crate) fn collect_layout_children(
                 if matches!(display.inside(), DisplayInside::Contents) {
                     has_contents = true;
                     all_out_of_flow = false;
+                    // Recurse into display:contents children to check grandchildren's display types
+                    let mut contents_stack: Vec<usize> = child.children.clone();
+                    while let Some(c_id) = contents_stack.pop() {
+                        let c_node = &doc.nodes[c_id];
+                        let c_style = c_node.primary_styles();
+                        let c_style = c_style.as_ref();
+                        let c_display = c_style
+                            .map(|s| s.clone_display())
+                            .unwrap_or(Display::inline());
+
+                        if matches!(c_display.inside(), DisplayInside::Contents) {
+                            contents_stack.extend(c_node.children.iter().rev().copied());
+                            continue;
+                        }
+
+                        let c_position = c_style
+                            .map(|s| s.clone_position())
+                            .unwrap_or(PositionProperty::Static);
+                        let c_float = c_style.map(|s| s.clone_float()).unwrap_or(Float::None);
+
+                        if c_node.is_whitespace_node() {
+                            continue;
+                        }
+
+                        let is_in_flow = matches!(
+                            c_position,
+                            PositionProperty::Static
+                                | PositionProperty::Relative
+                                | PositionProperty::Sticky
+                        ) && matches!(c_float, Float::None);
+
+                        if !is_in_flow {
+                            continue;
+                        }
+
+                        all_out_of_flow = false;
+                        match c_display.outside() {
+                            DisplayOutside::None => {}
+                            DisplayOutside::Block
+                            | DisplayOutside::TableCaption
+                            | DisplayOutside::InternalTable => all_inline = false,
+                            DisplayOutside::Inline => {
+                                all_block = false;
+
+                                if c_node.is_or_contains_block() {
+                                    all_inline = false;
+                                }
+                            }
+                        }
+                    }
                 } else {
                     let position = style
                         .map(|s| s.clone_position())
@@ -278,7 +318,6 @@ pub(crate) fn collect_layout_children(
                 );
             }
 
-            // TODO: fix display:contents
             if all_inline {
                 let existing_layout = doc.nodes[container_node_id]
                     .element_data_mut()
@@ -398,7 +437,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: usize) {
         let after_node_id = node.after;
 
         // Note: yes these are kinda backwards
-        let style_data = node.stylo_element_data.get();
+        let style_data = node.stylo_element_data.borrow();
         let before_style = style_data
             .as_ref()
             .and_then(|d| d.styles.pseudos.as_array()[1].clone());
@@ -455,7 +494,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: usize) {
             element_data.styles.primary = Some(pe_style.clone());
             element_data.set_restyled();
             element_data.damage = ALL_DAMAGE;
-            *doc.nodes[new_node_id].stylo_element_data.ensure_init_mut() = element_data;
+            *doc.nodes[new_node_id].stylo_element_data.borrow_mut() = Some(element_data);
 
             let node = &mut doc.nodes[node_id];
             node.set_pe_by_index(idx, Some(new_node_id));
@@ -466,7 +505,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: usize) {
         if let (Some(pe_node_id), Some(pe_style)) = (pe_node_id, pe_style) {
             // TODO: Update content
 
-            let mut node_styles = doc.nodes[pe_node_id].stylo_element_data.get_mut();
+            let mut node_styles = doc.nodes[pe_node_id].stylo_element_data.borrow_mut();
             let node_styles = &mut node_styles.as_mut().unwrap();
             node_styles.damage.insert(ALL_DAMAGE);
             let primary_styles = &mut node_styles.styles.primary;
@@ -543,7 +582,10 @@ fn collect_complex_layout_children(
                     doc.create_node(NodeData::AnonymousBlock(ElementData::new(NAME, Vec::new())));
 
                 // Set style data
-                let parent_style = doc.nodes[container_node_id].primary_styles().unwrap();
+                let Some(parent_style) = doc.nodes[container_node_id].primary_styles() else {
+                    // Parent has no computed styles — skip anonymous block creation
+                    return;
+                };
                 let read_guard = doc.guard.read();
                 let guards = StylesheetGuards::same(&read_guard);
                 let style = doc.stylist.style_for_anonymous::<&Node>(
@@ -559,9 +601,7 @@ fn collect_complex_layout_children(
 
                 stylo_element_data.styles.primary = Some(style);
                 stylo_element_data.set_restyled();
-
-                *doc.nodes[node_id].stylo_element_data.ensure_init_mut() = stylo_element_data;
-
+                *doc.nodes[node_id].stylo_element_data.borrow_mut() = Some(stylo_element_data);
                 if doc.nodes[container_node_id]
                     .flags
                     .contains(NodeFlags::IS_IN_DOCUMENT)
@@ -636,7 +676,7 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: usize, is_multil
     styles.insert(StyleProperty::LineHeight(parley_style.line_height));
     styles.insert(StyleProperty::Brush(parley_style.brush));
 
-    editor.refresh_layout(&mut doc.font_ctx.lock().unwrap(), &mut doc.layout_ctx);
+    editor.refresh_layout(&mut doc.font_ctx.lock().unwrap_or_else(|e| e.into_inner()), &mut doc.layout_ctx);
 }
 
 fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: usize) {
@@ -659,14 +699,31 @@ pub(crate) fn find_inline_layout_embedded_boxes(
 ) {
     flush_inline_pseudos_recursive(doc, inline_context_root_node_id);
 
-    iter_children_and_pseudos!(doc.nodes[inline_context_root_node_id], |child_id| {
+    let root_node = &doc.nodes[inline_context_root_node_id];
+    if let Some(before_id) = root_node.before {
         find_inline_layout_embedded_boxes_recursive(
-            &mut doc.nodes,
+            &doc.nodes,
+            inline_context_root_node_id,
+            before_id,
+            layout_children,
+        );
+    }
+    for child_id in root_node.children.iter().copied() {
+        find_inline_layout_embedded_boxes_recursive(
+            &doc.nodes,
             inline_context_root_node_id,
             child_id,
             layout_children,
         );
-    });
+    }
+    if let Some(after_id) = root_node.after {
+        find_inline_layout_embedded_boxes_recursive(
+            &doc.nodes,
+            inline_context_root_node_id,
+            after_id,
+            layout_children,
+        );
+    }
 
     fn flush_inline_pseudos_recursive(doc: &mut BaseDocument, node_id: usize) {
         doc.iter_children_mut(node_id, |child_id, doc| {
@@ -686,12 +743,12 @@ pub(crate) fn find_inline_layout_embedded_boxes(
     }
 
     fn find_inline_layout_embedded_boxes_recursive(
-        nodes: &mut Slab<Node>,
+        nodes: &Slab<Node>,
         parent_id: usize,
         node_id: usize,
         layout_children: &mut Vec<usize>,
     ) {
-        let node = &mut nodes[node_id];
+        let node = &nodes[node_id];
 
         // Set layout_parent for node.
         node.layout_parent.set(Some(parent_id));
@@ -712,15 +769,15 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                         node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                     }
                     (DisplayOutside::None, DisplayInside::Contents) => {
-                        node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                        iter_children!(nodes[node_id], |child_id| {
+                        for child_id in node.children.iter().copied() {
+                            node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                             find_inline_layout_embedded_boxes_recursive(
                                 nodes,
                                 parent_id,
                                 child_id,
                                 layout_children,
                             );
-                        });
+                        }
                     }
                     (DisplayOutside::Inline, DisplayInside::Flow) => {
                         let tag_name = &element_data.name.local;
@@ -736,14 +793,31 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                         } else {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                            iter_children_and_pseudos!(nodes[node_id], |child_id| {
+
+                            if let Some(before_id) = node.before {
+                                find_inline_layout_embedded_boxes_recursive(
+                                    nodes,
+                                    node_id,
+                                    before_id,
+                                    layout_children,
+                                );
+                            }
+                            for child_id in node.children.iter().copied() {
                                 find_inline_layout_embedded_boxes_recursive(
                                     nodes,
                                     node_id,
                                     child_id,
                                     layout_children,
                                 );
-                            });
+                            }
+                            if let Some(after_id) = node.after {
+                                find_inline_layout_embedded_boxes_recursive(
+                                    nodes,
+                                    node_id,
+                                    after_id,
+                                    layout_children,
+                                );
+                            }
                         }
                     }
                     // Inline box
@@ -755,7 +829,11 @@ pub(crate) fn find_inline_layout_embedded_boxes(
             NodeData::Comment | NodeData::Text(_) => {
                 node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
             }
-            NodeData::Document => unreachable!(),
+            NodeData::Document | NodeData::ShadowRoot { .. } => {
+                // Document and ShadowRoot nodes should not appear as inline
+                // children. If they do (internal state corruption), skip silently
+                // rather than panicking.
+            }
         }
     }
 }
@@ -788,16 +866,10 @@ pub(crate) fn build_inline_layout_into(
 
     // Set whitespace collapsing mode
     let collapse_mode = root_node_style
-        .as_ref()
         .map(|s| s.get_inherited_text().white_space_collapse)
         .map(stylo_to_parley::white_space_collapse)
         .unwrap_or(WhiteSpaceCollapse::Collapse);
     builder.set_white_space_mode(collapse_mode);
-
-    let text_transform = root_node_style
-        .as_ref()
-        .map(|s| s.clone_text_transform() & TextTransform::CASE_TRANSFORMS)
-        .unwrap_or(TextTransform::NONE);
 
     // Render position-inside list items
     if let Some(ListItemLayout {
@@ -820,7 +892,6 @@ pub(crate) fn build_inline_layout_into(
             inline_context_root_node_id,
             before_id,
             collapse_mode,
-            text_transform,
             root_line_height,
         );
     }
@@ -831,7 +902,6 @@ pub(crate) fn build_inline_layout_into(
             inline_context_root_node_id,
             child_id,
             collapse_mode,
-            text_transform,
             root_line_height,
         );
     }
@@ -842,7 +912,6 @@ pub(crate) fn build_inline_layout_into(
             inline_context_root_node_id,
             after_id,
             collapse_mode,
-            text_transform,
             root_line_height,
         );
     }
@@ -856,7 +925,6 @@ pub(crate) fn build_inline_layout_into(
         parent_id: usize,
         node_id: usize,
         collapse_mode: WhiteSpaceCollapse,
-        parent_text_transform: TextTransform,
         root_line_height: f32,
     ) {
         let node = &nodes[node_id];
@@ -873,10 +941,6 @@ pub(crate) fn build_inline_layout_into(
             .map(stylo_to_parley::white_space_collapse)
             .unwrap_or(collapse_mode);
         builder.set_white_space_mode(collapse_mode);
-
-        let text_transform = style
-            .map(|s| s.clone_text_transform() & TextTransform::CASE_TRANSFORMS)
-            .unwrap_or(TextTransform::NONE);
 
         match &node.data {
             NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data) => {
@@ -913,7 +977,6 @@ pub(crate) fn build_inline_layout_into(
                                 parent_id,
                                 child_id,
                                 collapse_mode,
-                                text_transform,
                                 root_line_height,
                             );
                         }
@@ -974,7 +1037,6 @@ pub(crate) fn build_inline_layout_into(
                                     node_id,
                                     before_id,
                                     collapse_mode,
-                                    text_transform,
                                     root_line_height,
                                 );
                             }
@@ -986,7 +1048,6 @@ pub(crate) fn build_inline_layout_into(
                                     node_id,
                                     child_id,
                                     collapse_mode,
-                                    text_transform,
                                     root_line_height,
                                 );
                             }
@@ -997,7 +1058,6 @@ pub(crate) fn build_inline_layout_into(
                                     node_id,
                                     after_id,
                                     collapse_mode,
-                                    text_transform,
                                     root_line_height,
                                 );
                             }
@@ -1022,24 +1082,15 @@ pub(crate) fn build_inline_layout_into(
             NodeData::Text(data) => {
                 // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                 // dbg!(&data.content);
-
-                // TODO: optimize case transforms to be non-allocating
-                match parent_text_transform {
-                    TextTransform::UPPERCASE => {
-                        builder.push_text(&data.content.to_uppercase());
-                    }
-                    TextTransform::LOWERCASE => {
-                        builder.push_text(&data.content.to_lowercase());
-                    }
-                    _ => {
-                        builder.push_text(&data.content);
-                    }
-                }
+                builder.push_text(&data.content);
             }
             NodeData::Comment => {
                 // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
             }
-            NodeData::Document => unreachable!(),
+            NodeData::Document | NodeData::ShadowRoot { .. } => {
+                // Document and ShadowRoot nodes should not appear as inline
+                // children. If they do (internal state corruption), skip silently.
+            }
         }
     }
 }

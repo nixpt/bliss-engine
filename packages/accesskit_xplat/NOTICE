@@ -1,0 +1,17 @@
+bliss-accesskit-xplat
+
+Forked from AccessKit's `accesskit_xplat` cross-platform adapter crate.
+
+  Upstream:   https://github.com/AccessKit/accesskit
+  Copyright:  The AccessKit Authors
+  License:    Apache-2.0
+
+Modifications made for Bliss:
+  - macOS/Windows: graceful fallback (`Self { inner: None }`) instead of
+    `unimplemented!()` when handed a UiKit/WinRT window handle, so
+    accessibility is silently disabled on unsupported handle types rather
+    than panicking.
+  - Android: hardened JNI thread attach (`attach_current_thread()` with a
+    fallback to `get_env()`, instead of an unconditional `get_env().unwrap()`).
+
+See LICENSE-APACHE in this crate for the full license text.

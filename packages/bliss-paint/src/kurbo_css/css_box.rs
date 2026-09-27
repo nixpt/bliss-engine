@@ -543,6 +543,8 @@ fn start_angle(bt_width: f64, br_width: f64, radii: Vec2) -> f64 {
 
 #[test]
 fn should_solve_properly() {
-    // 0.643501
-    dbg!(start_angle(4.0, 1.0, Vec2 { x: 1.0, y: 2.0 }));
+    let angle = start_angle(4.0, 1.0, Vec2 { x: 1.0, y: 2.0 });
+    assert!(angle.is_finite(), "start_angle returned non-finite: {angle}");
+    // expected ≈ 0.643501
+    assert!((angle - 0.6435).abs() < 0.001, "unexpected result: {angle}");
 }

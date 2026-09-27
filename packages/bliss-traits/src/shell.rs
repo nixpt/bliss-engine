@@ -41,6 +41,13 @@ pub trait ShellProvider: Send + Sync + 'static {
         let _ = filter;
         vec![]
     }
+
+    /// Show a platform-native context menu at the given screen coordinates.
+    /// The default implementation does nothing.
+    fn show_context_menu(&self, x: f64, y: f64) {
+        let _ = x;
+        let _ = y;
+    }
 }
 
 pub struct DummyShellProvider;

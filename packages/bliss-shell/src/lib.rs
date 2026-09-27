@@ -7,12 +7,26 @@
 //!  - `accessibility`: Enables [`accesskit`] accessibility support.
 //!  - `hot-reload`: Enables hot-reloading of Dioxus RSX.
 //!  - `tracing`: Enables tracing support.
+//!
+//! Platform support: Linux + Android. macOS / iOS / Windows / *BSD `cfg`
+//! branches inside source remain as future-port anchors (see workspace-meta
+//! `FOREMAN_THREADS.md` POSIX-scope thread) but the crate as a whole is
+//! gated to Linux/Android via `compile_error!` below.
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+compile_error!(
+    "bliss-shell is Linux/Android-only by policy. \
+    See projects/exosphere/CLAUDE.md \"Platform support\"."
+);
 
 mod application;
 mod convert_events;
 mod event;
 mod net;
 mod window;
+
+#[cfg(feature = "exoshell")]
+pub mod exoshell;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;
@@ -184,5 +198,23 @@ impl ShellProvider for BlissShellProvider {
             dialog.pick_file().map(|file| vec![file])
         };
         files.unwrap_or_default()
+    }
+
+    /// Show a platform-native context menu at the given screen coordinates.
+    ///
+    /// winit does not provide a native context menu API, so this requires
+    /// platform-specific shell integration. The context menu event is still
+    /// properly dispatched to the script engine — scripts can handle it via
+    /// JavaScript event listeners and render custom in-app menus.
+    ///
+    /// Platform-specific implementation notes:
+    /// - Linux: Requires a GUI toolkit (GTK popover via gtk-rs) or
+    ///   xdg-desktop-portal menu (ashpd/zbus)
+    /// - macOS: Uses NSMenu via objc2
+    /// - Windows: Uses TrackPopupMenu via winapi
+    fn show_context_menu(&self, x: f64, y: f64) {
+        let _ = (x, y);
+        // No native context menu is available without platform-specific
+        // GUI toolkit dependencies. The event system handles the rest.
     }
 }

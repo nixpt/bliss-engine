@@ -359,8 +359,8 @@ pub(crate) fn winit_physical_key_to_kbt_code(physical_key: &WinitPhysicalKey) ->
             WinitKeyCode::ShowAllWindows => Code::ShowAllWindows,
             WinitKeyCode::ZoomToggle => Code::ZoomToggle,
 
-            WinitKeyCode::KeyboardBacklightToggle => todo!(),
-            _ => todo!(),
+            WinitKeyCode::KeyboardBacklightToggle => Code::Unidentified,
+            _ => Code::Unidentified,
         },
     }
 }

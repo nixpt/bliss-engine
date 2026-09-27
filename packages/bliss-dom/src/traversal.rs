@@ -4,44 +4,6 @@ use style::{dom::TNode as _, values::specified::box_::DisplayInside};
 
 use crate::{BaseDocument, Node};
 
-macro_rules! iter_children {
-    ($node_expr:expr, $cb:expr) => {{
-        let node = &mut $node_expr;
-        let children = core::mem::take(&mut node.children);
-        for child_id in children.iter().copied() {
-            $cb(child_id)
-        }
-        $node_expr.children = children;
-    }};
-}
-pub(crate) use iter_children;
-
-macro_rules! iter_children_and_pseudos {
-    ($node_expr:expr, $cb:expr) => {{
-        // Load node
-        let node = &mut $node_expr;
-
-        // Copy before, after, and take children
-        let before = node.before;
-        let after = node.after;
-        let children = core::mem::take(&mut node.children);
-
-        if let Some(before) = before {
-            $cb(before)
-        }
-        for child_id in children.iter().copied() {
-            $cb(child_id)
-        }
-        if let Some(after) = after {
-            $cb(after)
-        }
-
-        // Reload node and put children back
-        $node_expr.children = children;
-    }};
-}
-pub(crate) use iter_children_and_pseudos;
-
 #[derive(Clone)]
 /// An pre-order tree traverser for a [BaseDocument](crate::document::BaseDocument).
 pub struct TreeTraverser<'a> {
@@ -152,9 +114,10 @@ impl BaseDocument {
             }
 
             let Some(parent_id) = node.layout_parent.get() else {
-                // Shouldn't be reachable unless invalid node_id is passed
-                // as root node is always non-anonymous
-                panic!("Node does not exist or does not have a non-anonymous parent");
+                // No non-anonymous ancestor found — return the node itself.
+                // This is reachable if an anonymous node's layout_parent
+                // chain is broken (e.g., DOM manipulation during layout).
+                return node.id;
             };
 
             node_id = parent_id;
@@ -212,6 +175,55 @@ impl BaseDocument {
             cb(after_node_id, self)
         }
         self.nodes[node_id].after = after;
+    }
+
+    pub fn prev_node(&self, start: &Node, mut filter: impl FnMut(&Node) -> bool) -> Option<usize> {
+        let start_id = start.id;
+        let mut node = start;
+        loop {
+            // Next is previous sibling (or the last child of the previous sibling)
+            let next = if let Some(parent) = node.parent_node() {
+                let self_idx = parent
+                    .children
+                    .iter()
+                    .position(|id| *id == node.id)
+                    .unwrap();
+                // Previous sibling: go to its last child (and repeat down the tree)
+                if self_idx > 0 {
+                    let mut sibling = &self.nodes[parent.children[self_idx - 1]];
+                    // Descend to the last child
+                    while !sibling.children.is_empty() {
+                        sibling = &self.nodes[*sibling.children.last().unwrap()];
+                    }
+                    sibling
+                }
+                // No previous sibling: go to parent
+                else {
+                    parent
+                }
+            }
+            // No parent: wrap to the last node in the tree
+            else {
+                self.last_node_in_tree()
+            };
+
+            if filter(next) {
+                return Some(next.id);
+            } else if next.id == start_id {
+                return None;
+            }
+
+            node = next;
+        }
+    }
+
+    /// Find the last node in a pre-order traversal of the tree (deepest last child of the root's last child).
+    fn last_node_in_tree(&self) -> &Node {
+        let mut node = self.root_node();
+        while !node.children.is_empty() {
+            node = &self.nodes[*node.children.last().unwrap()];
+        }
+        node
     }
 
     pub fn next_node(&self, start: &Node, mut filter: impl FnMut(&Node) -> bool) -> Option<usize> {
@@ -371,33 +383,31 @@ impl BaseDocument {
 
         // Traverse tree in document order
         for node_id in TreeTraverser::new(self) {
-            if !found_first {
-                if node_id == first_anchor {
-                    found_first = true;
-                    if let Some(anon_id) = first_anon {
-                        // First is anonymous: collect from this parent starting at anon_id
-                        // Stop at last_anchor if different parent, or last_anon if same parent
-                        let stop_at = if first_anchor == last_anchor {
-                            // Same parent: stop at last_anon
-                            last_anon
-                        } else {
-                            // Different parents: stop at last_anchor (which is a child of first_anchor)
-                            Some(last_anchor)
-                        };
-                        self.collect_layout_children_inline_roots(
-                            node_id,
-                            Some(anon_id),
-                            stop_at,
-                            &mut result,
-                        );
-                        // If we collected up to last, we're done
-                        if result.last() == Some(&last_anchor)
-                            || last_anon.is_some_and(|la| result.last() == Some(&la))
-                        {
-                            break;
-                        }
-                        continue;
+            if !found_first && node_id == first_anchor {
+                found_first = true;
+                if let Some(anon_id) = first_anon {
+                    // First is anonymous: collect from this parent starting at anon_id
+                    // Stop at last_anchor if different parent, or last_anon if same parent
+                    let stop_at = if first_anchor == last_anchor {
+                        // Same parent: stop at last_anon
+                        last_anon
+                    } else {
+                        // Different parents: stop at last_anchor (which is a child of first_anchor)
+                        Some(last_anchor)
+                    };
+                    self.collect_layout_children_inline_roots(
+                        node_id,
+                        Some(anon_id),
+                        stop_at,
+                        &mut result,
+                    );
+                    // If we collected up to last, we're done
+                    if result.last() == Some(&last_anchor)
+                        || last_anon.is_some_and(|la| result.last() == Some(&la))
+                    {
+                        break;
                     }
+                    continue;
                 }
             }
 

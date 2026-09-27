@@ -24,7 +24,6 @@ pub(crate) mod stylo {
 pub(crate) mod parley {
     pub(crate) use parley::FontVariation;
     pub(crate) use parley::fontique::QueryFamily;
-    pub(crate) use parley::setting::*;
     pub(crate) use parley::style::*;
 }
 
@@ -40,6 +39,7 @@ pub(crate) fn generic_font_family(input: stylo::GenericFontFamily) -> parley::Ge
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn query_font_family(input: &stylo::SingleFontFamily) -> parley::QueryFamily<'_> {
     match input {
         stylo::SingleFontFamily::FamilyName(name) => {
@@ -86,7 +86,7 @@ pub(crate) fn font_variations(input: &stylo::FontVariationSettings) -> Vec<parle
         .0
         .iter()
         .map(|v| parley::FontVariation {
-            tag: parley::Tag::from_bytes(v.tag.0.to_be_bytes()),
+            tag: parlance::Tag::from_bytes(v.tag.0.to_be_bytes()),
             value: v.value,
         })
         .collect()
@@ -97,7 +97,14 @@ pub(crate) fn white_space_collapse(input: stylo::WhiteSpaceCollapse) -> parley::
         stylo::WhiteSpaceCollapse::Collapse => parley::WhiteSpaceCollapse::Collapse,
         stylo::WhiteSpaceCollapse::Preserve => parley::WhiteSpaceCollapse::Preserve,
 
-        // TODO: Implement PreserveBreaks and BreakSpaces modes
+        // Parley only supports Collapse and Preserve. The following modes are approximations:
+        //   - PreserveBreaks (white-space: pre-wrap): Collapses spaces but preserves newlines.
+        //     Mapping to Preserve keeps newlines working, at the cost of also preserving spaces.
+        //   - BreakSpaces (white-space: break-spaces): Like Preserve but spaces can break.
+        //     Mapping to Preserve keeps whitespace preserved, at the cost of spaces not breaking
+        //     (which may cause text to overflow its container).
+        //
+        // Full support requires Parley to add these modes natively.
         stylo::WhiteSpaceCollapse::PreserveBreaks => parley::WhiteSpaceCollapse::Preserve,
         stylo::WhiteSpaceCollapse::BreakSpaces => parley::WhiteSpaceCollapse::Preserve,
     }
@@ -124,11 +131,6 @@ pub(crate) fn style(
         .resolve(Length::new(font_size))
         .px();
 
-    let word_spacing = itext_styles
-        .word_spacing
-        .resolve(Length::new(font_size))
-        .px();
-
     // Convert Bold/Italic
     let font_weight = self::font_weight(font_styles.font_weight);
     let font_style = self::font_style(font_styles.font_style);
@@ -149,15 +151,11 @@ pub(crate) fn style(
                     // Legacy web compatibility
                     #[cfg(target_vendor = "apple")]
                     if name == "-apple-system" {
-                        break 'ret parley::FontFamilyName::Generic(
-                            parley::GenericFamily::SystemUi,
-                        );
+                        break 'ret parley::FontFamilyName::Generic(parley::GenericFamily::SystemUi);
                     }
                     #[cfg(target_os = "macos")]
                     if name == "BlinkMacSystemFont" {
-                        break 'ret parley::FontFamilyName::Generic(
-                            parley::GenericFamily::SystemUi,
-                        );
+                        break 'ret parley::FontFamilyName::Generic(parley::GenericFamily::SystemUi);
                     }
 
                     break 'ret parley::FontFamilyName::Named(Cow::Owned(name.to_string()));
@@ -186,7 +184,6 @@ pub(crate) fn style(
     };
 
     parley::TextStyle {
-        // font_family: parley::FontFamily::Single(FontFamilyName::Generic(GenericFamily::SystemUi)),
         font_family: parley::FontFamily::List(Cow::Owned(families)),
         font_size,
         font_width,
@@ -196,7 +193,7 @@ pub(crate) fn style(
         font_features: parley::FontFeatures::List(Cow::Borrowed(&[])),
         locale: Default::default(),
         line_height,
-        word_spacing,
+        word_spacing: Default::default(),
         letter_spacing,
         text_wrap_mode,
         overflow_wrap,

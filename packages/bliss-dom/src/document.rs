@@ -1,4 +1,4 @@
-use crate::events::{handle_dom_event, DragMode, ScrollAnimationState};
+use crate::events::{DragMode, ScrollAnimationState, handle_dom_event};
 use crate::font_metrics::BlissFontMetricsProvider;
 use crate::layout::construct::ConstructionTask;
 use crate::layout::damage::ALL_DAMAGE;
@@ -14,21 +14,21 @@ use crate::url::DocumentUrl;
 use crate::util::ImageType;
 use crate::{
     DEFAULT_CSS, DocumentConfig, DocumentMutator, DummyHtmlParserProvider, ElementData,
-    EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, StyleThreading,
-    TextNodeData,
+    EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, TextNodeData,
 };
 use bliss_traits::devtools::DevtoolSettings;
 use bliss_traits::events::{
     BlissScrollEvent, DomEvent, DomEventData, EventSink, HitResult, UiEvent,
 };
 use bliss_traits::navigation::{DummyNavigationProvider, NavigationProvider};
-use bliss_traits::net::{AbortSignal, DummyNetProvider, NetProvider, Request};
+use bliss_traits::net::{DummyNetProvider, NetProvider, Request};
 use bliss_traits::shell::{ColorScheme, DummyShellProvider, ShellProvider, Viewport};
 use cursor_icon::CursorIcon;
 use linebender_resource_handle::Blob;
+use downcast_rs::{Downcast, impl_downcast};
 use markup5ever::local_name;
 use parley::{FontContext, PlainEditorDriver};
-use selectors::{matching::QuirksMode, Element};
+use selectors::{Element, matching::QuirksMode};
 use slab::Slab;
 use std::any::Any;
 use std::cell::RefCell;
@@ -37,32 +37,31 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 use std::task::Context as TaskContext;
+use std::time::Instant;
 use style::Atom;
 use style::animation::DocumentAnimationSet;
 use style::attr::{AttrIdentifier, AttrValue};
 use style::data::{ElementData as StyloElementData, ElementStyles};
 use style::media_queries::MediaType;
-use style::properties::style_structs::Font;
 use style::properties::ComputedValues;
+use style::properties::style_structs::Font;
 use style::queries::values::PrefersColorScheme;
 use style::selector_parser::ServoElementSnapshot;
 use style::servo_arc::Arc as ServoArc;
 use style::values::GenericAtomIdent;
-use style::values::computed::{Overflow, UserSelect};
+use style::values::computed::Overflow;
 use style::{
-    device::Device,
     dom::{TDocument, TNode},
-    media_queries::MediaList,
+    media_queries::{Device, MediaList},
     selector_parser::SnapshotMap,
     shared_lock::{SharedRwLock, StylesheetGuards},
     stylesheets::{AllowImportRules, DocumentStyleSheet, Origin, Stylesheet},
     stylist::Stylist,
 };
 use url::Url;
-use web_time::Instant;
 
 #[cfg(feature = "parallel-construct")]
 use thread_local::ThreadLocal;
@@ -121,7 +120,16 @@ impl DerefMut for DocGuardMut<'_> {
 
 /// Abstraction over wrappers around [`BaseDocument`] to allow for them all to
 /// be driven by [`bliss-shell`](https://docs.rs/bliss-shell)
-pub trait Document: Any + 'static {
+///
+/// Carries `Downcast` (not just `Any`) as a real supertrait so `dyn Document`
+/// gets its own vtable entry for it (see `impl_downcast!` below). `Any`
+/// alone isn't enough: `downcast_rs::Downcast`'s blanket impl only covers
+/// `Sized` types, so a bare `Box<dyn Document>` picks up the impl on the
+/// OUTER `Box` (itself `Sized + Any + 'static`) rather than on the inner
+/// trait object — a caller calling `.as_any_mut()` on the box gets an `Any`
+/// wrapping the `Box` itself, and `downcast_mut::<ConcreteDoc>()` on that
+/// always fails, unconditionally, regardless of what's actually inside.
+pub trait Document: Downcast + 'static {
     fn inner(&self) -> DocGuard<'_>;
     fn inner_mut(&mut self) -> DocGuardMut<'_>;
 
@@ -156,6 +164,7 @@ pub trait Document: Any + 'static {
         self.inner().id
     }
 }
+impl_downcast!(Document);
 
 pub struct PlainDocument(pub BaseDocument);
 impl Document for PlainDocument {
@@ -203,10 +212,6 @@ pub struct BaseDocument {
     pub(crate) viewport: Viewport,
     // Scroll within our viewport
     pub(crate) viewport_scroll: crate::Point<f64>,
-    /// CSS media type used to evaluate `@media` rules.
-    pub(crate) media_type: MediaType,
-    /// Strategy for Stylo's style traversal during `resolve`.
-    pub(crate) style_threading: StyleThreading,
 
     // Events
     pub(crate) tx: Sender<DocumentEvent>,
@@ -245,7 +250,7 @@ pub struct BaseDocument {
     pub(crate) focus_node_id: Option<usize>,
     /// The node which is currently active (if any)
     pub(crate) active_node_id: Option<usize>,
-    /// The node which recieved a mousedown event (if any)
+    /// The node which received a mousedown event (if any)
     pub(crate) mousedown_node_id: Option<usize>,
     /// The last time a mousedown was made (for double-click detection)
     pub(crate) last_mousedown_time: Option<Instant>,
@@ -285,13 +290,6 @@ pub struct BaseDocument {
     /// Set of changed nodes for updating the accessibility tree
     pub(crate) deferred_construction_nodes: Vec<ConstructionTask>,
 
-    /// Nodes that contain custom widgets
-    #[cfg(feature = "custom-widget")]
-    pub(crate) custom_widget_nodes: HashSet<usize>,
-    /// Rendering resources allocated by custom widgets that should be deallocated during the next render
-    #[cfg(feature = "custom-widget")]
-    pub(crate) pending_resource_deallocations: Vec<anyrender::ResourceId>,
-
     /// Cache of loaded images, keyed by URL. Allows reusing images across multiple
     /// elements without re-fetching from the network.
     pub(crate) image_cache: HashMap<String, ImageData>,
@@ -301,8 +299,22 @@ pub struct BaseDocument {
     /// Value is a list of (node_id, image_type) pairs waiting for the image.
     pub(crate) pending_images: HashMap<String, Vec<(usize, ImageType)>>,
 
-    // Tracks in-flight "critical" resources (e.g. stylesheets linked from the `<head>`)
-    pub(crate) pending_critical_resources: HashSet<usize>,
+    /// Event listener registry, mapping (node_id, event_name) to registered handler_ids.
+    /// Used by addEventListener/removeEventListener via the DomController API.
+    /// The handler_id is an opaque identifier that the caller (e.g. a script engine)
+    /// uses to dispatch callbacks when the event fires.
+    pub(crate) event_listeners: HashMap<(usize, String), Vec<u64>>,
+
+    /// Scoped stylesheets for each shadow root, keyed by shadow root node ID.
+    /// When a `<style>` element is inside a shadow root, its stylesheet is stored
+    /// here instead of being added to the global stylist. These are used to build
+    /// per-shadow-root CascadeData during style resolution.
+    pub(crate) shadow_scoped_sheets: HashMap<usize, Vec<DocumentStyleSheet>>,
+
+    /// Pre-built CascadeData for each shadow root, keyed by shadow root node ID.
+    /// Rebuilt during `resolve_stylist()` from `shadow_scoped_sheets`. Accessed by
+    /// `TShadowRoot::style_data()` to apply scoped styles within shadow roots.
+    pub(crate) shadow_cascade_data: HashMap<usize, Box<style::stylist::CascadeData>>,
 
     // Service providers
     /// Network provider. Can be used to fetch assets.
@@ -324,25 +336,16 @@ pub struct BaseDocument {
     /// Whether events should be forwarded to the event sink
     /// Used for lifecycle management - only "Running" capsules should receive events
     pub(crate) events_enabled: bool,
-
-    /// Carried on every sub-resource `Request` this document issues; aborting
-    /// it cancels all in-flight fetches tied to this document. Set via
-    /// [`DocumentConfig::abort_signal`].
-    pub(crate) abort_signal: Option<AbortSignal>,
 }
 
-pub(crate) fn make_device(
-    viewport: &Viewport,
-    media_type: MediaType,
-    font_ctx: Arc<Mutex<FontContext>>,
-) -> Device {
+pub(crate) fn make_device(viewport: &Viewport, font_ctx: Arc<Mutex<FontContext>>) -> Device {
     let width = viewport.window_size.0 as f32 / viewport.scale();
     let height = viewport.window_size.1 as f32 / viewport.scale();
     let viewport_size = euclid::Size2D::new(width, height);
     let device_pixel_ratio = euclid::Scale::new(viewport.scale());
 
     Device::new(
-        media_type,
+        MediaType::screen(),
         selectors::matching::QuirksMode::NoQuirks,
         viewport_size,
         device_pixel_ratio,
@@ -364,23 +367,20 @@ impl BaseDocument {
 
         let font_ctx = config
             .font_ctx
-            .map(|mut font_ctx| {
-                font_ctx.source_cache.make_shared();
-                // font_ctx.collection.make_shared();
-                font_ctx
-            })
+            // .map(|mut font_ctx| {
+            //     font_ctx.collection.make_shared();
+            //     font_ctx.source_cache.make_shared();
+            //     font_ctx
+            // })
             .unwrap_or_else(|| {
-                use parley::fontique::{Collection, CollectionOptions, SourceCache};
-                let mut font_ctx = FontContext {
-                    source_cache: SourceCache::new_shared(),
-                    collection: Collection::new(CollectionOptions {
-                        shared: false,
-                        system_fonts: cfg!(all(
-                            feature = "system_fonts",
-                            not(target_arch = "wasm32")
-                        )),
-                    }),
-                };
+                // let mut font_ctx = FontContext {
+                //     source_cache: SourceCache::new_shared(),
+                //     collection: Collection::new(CollectionOptions {
+                //         shared: true,
+                //         system_fonts: true,
+                //     }),
+                // };
+                let mut font_ctx = FontContext::default();
                 font_ctx
                     .collection
                     .register_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
@@ -388,20 +388,20 @@ impl BaseDocument {
             });
         let font_ctx = Arc::new(Mutex::new(font_ctx));
 
-        // Make sure we turn on stylo features *before* creating the Stylist
-        style_config::set_pref!("layout.grid.enabled", true);
-        style_config::set_pref!("layout.unimplemented", true);
-        style_config::set_pref!("layout.columns.enabled", true);
-        style_config::set_pref!("layout.threads", -1);
-
         let viewport = config.viewport.unwrap_or_default();
-        let media_type = config.media_type.unwrap_or_else(MediaType::screen);
-        let device = make_device(&viewport, media_type.clone(), font_ctx.clone());
+        let device = make_device(&viewport, font_ctx.clone());
         let stylist = Stylist::new(device, QuirksMode::NoQuirks);
         let snapshots = SnapshotMap::new();
         let nodes = Box::new(Slab::new());
         let guard = SharedRwLock::new();
         let nodes_to_id = HashMap::new();
+
+        // Make sure we turn on stylo features
+        style_config::set_bool("layout.flexbox.enabled", true);
+        style_config::set_bool("layout.grid.enabled", true);
+        style_config::set_bool("layout.legacy_layout", true);
+        style_config::set_bool("layout.unimplemented", true);
+        style_config::set_bool("layout.columns.enabled", true);
 
         let base_url = config
             .base_url
@@ -435,8 +435,6 @@ impl BaseDocument {
             snapshots,
             nodes_to_id,
             viewport,
-            media_type,
-            style_threading: config.style_threading,
             devtool_settings: DevtoolSettings::default(),
             viewport_scroll: crate::Point::ZERO,
             url: base_url,
@@ -456,17 +454,13 @@ impl BaseDocument {
             subdoc_is_animating: false,
             has_canvas: false,
             sub_document_nodes: HashSet::new(),
-
-            #[cfg(feature = "custom-widget")]
-            custom_widget_nodes: HashSet::new(),
-            #[cfg(feature = "custom-widget")]
-            pending_resource_deallocations: Vec::new(),
-
             changed_nodes: HashSet::new(),
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
             pending_images: HashMap::new(),
-            pending_critical_resources: HashSet::new(),
+            event_listeners: HashMap::new(),
+            shadow_scoped_sheets: HashMap::new(),
+            shadow_cascade_data: HashMap::new(),
             controls_to_form: HashMap::new(),
             net_provider,
             navigation_provider,
@@ -475,7 +469,6 @@ impl BaseDocument {
             script_engine: None,
             event_sink: None,
             events_enabled: false,
-            abort_signal: config.abort_signal,
             last_mousedown_time: None,
             mousedown_position: taffy::Point::ZERO,
             click_count: 0,
@@ -508,8 +501,7 @@ impl BaseDocument {
             },
             ..Default::default()
         };
-        let stylo_data = &mut doc.root_node_mut().stylo_element_data;
-        *stylo_data.ensure_init_mut() = stylo_element_data;
+        *doc.root_node().stylo_element_data.borrow_mut() = Some(stylo_element_data);
 
         doc
     }
@@ -551,6 +543,14 @@ impl BaseDocument {
         self.events_enabled = enabled;
     }
 
+    /// Query registered event listeners for a given node ID and event name.
+    /// Returns an empty Vec if no listeners are registered.
+    pub fn get_event_listeners(&self, node_id: usize, event_name: &str) -> &[u64] {
+        self.event_listeners
+            .get(&(node_id, event_name.to_string()))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
 
     /// Execute script code
     pub fn execute_script(
@@ -599,7 +599,9 @@ impl BaseDocument {
 
     /// Set base url for resolving linked resources (stylesheets, images, fonts, etc)
     pub fn set_base_url(&mut self, url: &str) {
-        self.url = DocumentUrl::from(Url::parse(url).unwrap());
+        self.url = DocumentUrl::from(Url::parse(url).unwrap_or_else(|_| {
+            Url::parse("about:blank").unwrap()
+        }));
     }
 
     pub fn guard(&self) -> &SharedRwLock {
@@ -612,29 +614,6 @@ impl BaseDocument {
 
     pub fn id(&self) -> usize {
         self.id
-    }
-
-    /// Wrapper around [`crate::net::stamped_request`]. Use the free function
-    /// when `&self` would conflict with a held `&mut` borrow on a field.
-    pub(crate) fn build_request(&self, url: url::Url) -> Request {
-        crate::net::stamped_request(url, self.abort_signal.as_ref())
-    }
-
-    pub fn favicon_url(&self) -> Option<String> {
-        self.tree().iter().find_map(|(_, node)| {
-            let data = &node.data;
-            if !data.is_element_with_tag_name(&local_name!("link")) {
-                return None;
-            }
-            let rel = data.attr(local_name!("rel"))?;
-            if !rel
-                .split_ascii_whitespace()
-                .any(|v| v.eq_ignore_ascii_case("icon"))
-            {
-                return None;
-            }
-            data.attr(local_name!("href")).map(|s| s.to_string())
-        })
     }
 
     pub fn get_node(&self, node_id: usize) -> Option<&Node> {
@@ -673,7 +652,7 @@ impl BaseDocument {
     /// we return all possibilities instead of just the first
     /// in order to allow the caller to decide which one is correct
     pub fn label_bound_input_element(&self, label_node_id: usize) -> Option<&Node> {
-        let label_element = self.nodes[label_node_id].element_data()?;
+        let label_element = self.get_node(label_node_id)?.element_data()?;
         if let Some(target_element_dom_id) = label_element.attr(local_name!("for")) {
             TreeTraverser::new(self)
                 .filter_map(|id| {
@@ -715,8 +694,7 @@ impl BaseDocument {
     }
 
     pub fn toggle_radio(&mut self, radio_set_name: String, target_radio_id: usize) {
-        for i in 0..self.nodes.len() {
-            let node = &mut self.nodes[i];
+        for (i, node) in self.nodes.iter_mut() {
             if let Some(node_data) = node.data.downcast_element_mut() {
                 if node_data.attr(local_name!("name")) == Some(&radio_set_name) {
                     let was_clicked = i == target_radio_id;
@@ -730,78 +708,49 @@ impl BaseDocument {
     }
 
     pub fn set_style_property(&mut self, node_id: usize, name: &str, value: &str) {
-        let node = &mut self.nodes[node_id];
-        let did_change = node.element_data_mut().unwrap().set_style_property(
-            name,
-            value,
-            &self.guard,
-            self.url.url_extra_data(),
-        );
-        if did_change {
-            node.mark_style_attr_updated();
-        }
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        // Non-element nodes have no element data to write style onto; silently
+        // ignore instead of panicking on attacker-controlled HTML.
+        let Some(el) = node.element_data_mut() else {
+            return;
+        };
+        el.set_style_property(name, value, &self.guard, self.url.url_extra_data());
     }
 
     pub fn remove_style_property(&mut self, node_id: usize, name: &str) {
-        let node = &mut self.nodes[node_id];
-        let did_change = node.element_data_mut().unwrap().remove_style_property(
-            name,
-            &self.guard,
-            self.url.url_extra_data(),
-        );
-        if did_change {
-            node.mark_style_attr_updated();
-        }
-    }
-
-    pub fn sub_document_node_ids(&self) -> Vec<usize> {
-        self.sub_document_nodes.iter().copied().collect()
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        let Some(el) = node.element_data_mut() else {
+            return;
+        };
+        el.remove_style_property(name, &self.guard, self.url.url_extra_data());
     }
 
     pub fn set_sub_document(&mut self, node_id: usize, sub_document: Box<dyn Document>) {
-        self.nodes[node_id]
-            .element_data_mut()
-            .unwrap()
-            .set_sub_document(sub_document);
+        let Some(node) = self.get_node_mut(node_id) else {
+            return;
+        };
+        let Some(el) = node.element_data_mut() else {
+            return;
+        };
+        el.set_sub_document(sub_document);
         self.sub_document_nodes.insert(node_id);
     }
 
     pub fn remove_sub_document(&mut self, node_id: usize) {
-        self.nodes[node_id]
-            .element_data_mut()
-            .unwrap()
-            .remove_sub_document();
+        let Some(node) = self.get_node_mut(node_id) else {
+            self.sub_document_nodes.remove(&node_id);
+            return;
+        };
+        let Some(el) = node.element_data_mut() else {
+            self.sub_document_nodes.remove(&node_id);
+            return;
+        };
+        el.remove_sub_document();
         self.sub_document_nodes.remove(&node_id);
-    }
-
-    #[cfg(feature = "custom-widget")]
-    pub fn custom_widget_node_ids(&self) -> Vec<usize> {
-        self.custom_widget_nodes.iter().copied().collect()
-    }
-
-    #[cfg(feature = "custom-widget")]
-    pub fn take_pending_resource_deallocations(&mut self) -> Vec<anyrender::ResourceId> {
-        std::mem::take(&mut self.pending_resource_deallocations)
-    }
-
-    #[cfg(feature = "custom-widget")]
-    pub fn set_custom_widget(&mut self, node_id: usize, widget: Box<dyn crate::Widget>) {
-        self.nodes[node_id]
-            .element_data_mut()
-            .unwrap()
-            .set_custom_widget(widget);
-        self.custom_widget_nodes.insert(node_id);
-    }
-
-    #[cfg(feature = "custom-widget")]
-    pub fn remove_custom_widget(&mut self, node_id: usize) {
-        let resources_to_deallocate = self.nodes[node_id]
-            .element_data_mut()
-            .unwrap()
-            .remove_custom_widget();
-        self.pending_resource_deallocations
-            .extend_from_slice(&resources_to_deallocate);
-        self.custom_widget_nodes.remove(&node_id);
     }
 
     pub fn root_node(&self) -> &Node {
@@ -812,29 +761,28 @@ impl BaseDocument {
         &mut self.nodes[0]
     }
 
-    pub fn try_root_element(&self) -> Option<&Node> {
+    pub fn root_element(&self) -> Option<&Node> {
         TDocument::as_node(&self.root_node()).first_element_child()
     }
 
-    pub fn root_element(&self) -> &Node {
-        TDocument::as_node(&self.root_node())
-            .first_element_child()
-            .unwrap()
-            .as_element()
-            .unwrap()
+    /// Deprecated alias for [`BaseDocument::root_element`].
+    /// Both return `Option<&Node>` after D-2c-followup widened the signature
+    /// to eliminate the chained-unwrap panic when the document has no
+    /// element child (e.g. before any HTML is parsed into it). Retained for
+    /// callers that want explicit Option-style naming.
+    pub fn try_root_element(&self) -> Option<&Node> {
+        self.root_element()
     }
 
     pub fn create_node(&mut self, node_data: NodeData) -> usize {
-        // Cast to `*const` since Node only needs shared access to the slab via
-        // `tree()`. Using `*const` instead of `*mut` eliminates the aliasing
-        // concern that would arise if `&mut Node` (from `&mut slab[id]`) and
-        // `tree()` were both live simultaneously under Stacked Borrows.
+        // Cast to *const since Node only needs shared access to the slab via tree()
         let slab_ptr = self.nodes.as_ref() as *const Slab<Node>;
+        let doc_ptr = self as *const BaseDocument;
         let guard = self.guard.clone();
 
         let entry = self.nodes.vacant_entry();
         let id = entry.key();
-        entry.insert(Node::new(slab_ptr, id, guard, node_data));
+        entry.insert(Node::new(slab_ptr, doc_ptr, id, guard, node_data));
 
         // Mark the new node as changed.
         self.changed_nodes.insert(id);
@@ -869,24 +817,70 @@ impl BaseDocument {
         self.create_node(data)
     }
 
+    /// Hardened for D-2c: atomic recursive clone. If `node_id` is stale OR any
+    /// descendant goes stale mid-recursion, the clone rolls back: the parent
+    /// slot and every already-cloned child slot are dropped from the slab via
+    /// `drop_node_ignoring_parent`, returning cleanly without panicking.
+    ///
+    /// On any failure path, returns `usize::MAX` as a documented sentinel —
+    /// unreachable in practice (slabs don't reach that size), so it eliminates
+    /// the collision with the document root slot id (`0`) that a naïve `0`
+    /// sentinel would have. Callers — e.g. html5ever's `TreeSink::clone_subtree`
+    /// trait method — can safely pass the result on without disambiguating,
+    /// trusting that a real clone produces a slot id strictly in `[1, MAX-1]`.
     pub fn deep_clone_node(&mut self, node_id: usize) -> usize {
-        // Load existing node
-        let node = &self.nodes[node_id];
+        let Some(node) = self.get_node(node_id) else {
+            debug_assert!(
+                false,
+                "deep_clone_node: stale root node_id={node_id}"
+            );
+            return usize::MAX;
+        };
         let data = node.data.clone();
         let children = node.children.clone();
 
-        // Create new node
         let new_node_id = self.create_node(data);
 
-        // Recursively clone children
-        let new_children: Vec<usize> = children
-            .into_iter()
-            .map(|child_id| self.deep_clone_node(child_id))
-            .collect();
-        for &child_id in &new_children {
-            self.nodes[child_id].parent = Some(new_node_id);
+        // Atomic clone: a stale descendant aborts the whole operation and
+        // rolls back any already-cloned children + the parent slot.
+        let mut new_children = Vec::with_capacity(children.len());
+        for child_id in children {
+            let cloned = self.deep_clone_node(child_id);
+            if cloned == usize::MAX {
+                // Rollback window: drop already-cloned children + the orphan parent.
+                for &drop_id in &new_children {
+                    self.drop_node_ignoring_parent(drop_id);
+                }
+                self.drop_node_ignoring_parent(new_node_id);
+                return usize::MAX;
+            }
+            new_children.push(cloned);
         }
-        self.nodes[new_node_id].children = new_children;
+
+        // Wire parent + children. By construction every id here was just
+        // produced by `create_node` or a successful recursive call.
+        for &child_id in &new_children {
+            match self.get_node_mut(child_id) {
+                Some(child) => child.parent = Some(new_node_id),
+                None => {
+                    debug_assert!(
+                        false,
+                        "deep_clone_node: vanished child_id={child_id}"
+                    );
+                    return usize::MAX;
+                }
+            }
+        }
+        match self.get_node_mut(new_node_id) {
+            Some(new_node) => new_node.children = new_children,
+            None => {
+                debug_assert!(
+                    false,
+                    "deep_clone_node: vanished new_node_id={new_node_id}"
+                );
+                return usize::MAX;
+            }
+        }
 
         new_node_id
     }
@@ -913,13 +907,13 @@ impl BaseDocument {
         node
     }
 
-    pub(crate) fn resolve_url(&self, raw: &str) -> url::Url {
-        self.url.resolve_relative(raw).unwrap_or_else(|| {
-            panic!(
-                "to be able to resolve {raw} with the base_url: {:?}",
-                *self.url
-            )
-        })
+    pub(crate) fn resolve_url(&self, raw: &str) -> Option<url::Url> {
+        let result = self.url.resolve_relative(raw);
+        #[cfg(feature = "tracing")]
+        if result.is_none() {
+            tracing::warn!("Failed to resolve URL '{raw}' with base {:?}", *self.url);
+        }
+        result
     }
 
     pub fn print_tree(&self) {
@@ -932,7 +926,13 @@ impl BaseDocument {
 
     pub fn reload_resource_by_href(&mut self, href_to_reload: &str) {
         for &node_id in self.nodes_to_stylesheet.keys() {
-            let node = &self.nodes[node_id];
+            let Some(node) = self.get_node(node_id) else {
+                debug_assert!(
+                    false,
+                    "reload_resource_by_href: stale node_id={node_id} (still in nodes_to_stylesheet)"
+                );
+                continue;
+            };
             let Some(element) = node.element_data() else {
                 continue;
             };
@@ -941,10 +941,12 @@ impl BaseDocument {
                 if let Some(href) = element.attr(local_name!("href")) {
                     // println!("Node {node_id} {href} {href_to_reload} {} {}", resolved_href.as_str(), resolved_href.as_str() == url_to_reload);
                     if href == href_to_reload {
-                        let resolved_href = self.resolve_url(href);
+                        let Some(resolved_href) = self.resolve_url(href) else {
+                            continue;
+                        };
                         self.net_provider.fetch(
                             self.id(),
-                            self.build_request(resolved_href.clone()),
+                            Request::get(resolved_href.clone()),
                             ResourceHandler::boxed(
                                 self.tx.clone(),
                                 self.id,
@@ -954,7 +956,6 @@ impl BaseDocument {
                                     source_url: resolved_href,
                                     guard: self.guard.clone(),
                                     net_provider: self.net_provider.clone(),
-                                    abort_signal: self.abort_signal.clone(),
                                 },
                             ),
                         );
@@ -965,10 +966,61 @@ impl BaseDocument {
     }
 
     pub fn process_style_element(&mut self, target_id: usize) {
-        let css = self.nodes[target_id].text_content();
+        let Some(node) = self.get_node(target_id) else {
+            debug_assert!(
+                false,
+                "process_style_element called with stale target_id={target_id}"
+            );
+            return;
+        };
+        let css = node.text_content();
         let css = html_escape::decode_html_entities(&css);
         let sheet = self.make_stylesheet(&css, Origin::Author);
+
+        // Check if this <style> element is inside a shadow root.
+        // If so, route its stylesheet to the shadow root's scoped storage
+        // instead of the global stylist, so the rules only apply within
+        // the shadow tree.
+        if let Some(shadow_root_id) = self.find_containing_shadow_root(target_id) {
+            self.shadow_scoped_sheets
+                .entry(shadow_root_id)
+                .or_default()
+                .push(sheet);
+            // Mark the cascade data as needing rebuild
+            self.shadow_cascade_data.remove(&shadow_root_id);
+            return;
+        }
+
         self.add_stylesheet_for_node(sheet, target_id);
+    }
+
+    /// Walk up the parent chain from `node_id` to find the nearest shadow root ancestor.
+    /// Returns `Some(shadow_root_node_id)` if one is found, `None` otherwise.
+    /// Hardened for D-2c: bails with `debug_assert!` on a stale id rather than
+    /// panicking on a raw slab index.
+    fn find_containing_shadow_root(&self, node_id: usize) -> Option<usize> {
+        let Some(start) = self.get_node(node_id) else {
+            debug_assert!(
+                false,
+                "find_containing_shadow_root: stale node_id={node_id}"
+            );
+            return None;
+        };
+        let mut current = start.parent;
+        while let Some(parent_id) = current {
+            let Some(parent) = self.get_node(parent_id) else {
+                debug_assert!(
+                    false,
+                    "find_containing_shadow_root: stale parent_id={parent_id}"
+                );
+                return None;
+            };
+            if matches!(parent.data, NodeData::ShadowRoot { .. }) {
+                return Some(parent_id);
+            }
+            current = parent.parent;
+        }
+        None
     }
 
     pub fn remove_user_agent_stylesheet(&mut self, contents: &str) {
@@ -995,7 +1047,6 @@ impl BaseDocument {
                 doc_id: self.id,
                 net_provider: self.net_provider.clone(),
                 shell_provider: self.shell_provider.clone(),
-                abort_signal: self.abort_signal.clone(),
             }),
             None,
             QuirksMode::NoQuirks,
@@ -1005,10 +1056,28 @@ impl BaseDocument {
         DocumentStyleSheet(ServoArc::new(data))
     }
 
+    /// Re-parse a `<style>` node's current text content and swap it into the
+    /// Stylist, for live theme/stylesheet updates after the initial parse
+    /// (unlike [`Self::process_style_element`], which only runs once per
+    /// `<style>` node via the mutator's insertion hook — see mutator.rs's
+    /// `style_nodes` set). Since arbitrary new rules can affect any element,
+    /// not just ones already marked dirty, this also marks the document root
+    /// for a full-subtree restyle — swapping a stylesheet without that would
+    /// leave every already-styled element showing its stale computed style
+    /// until something else happened to touch it.
     pub fn upsert_stylesheet_for_node(&mut self, node_id: usize) {
-        let raw_styles = self.nodes[node_id].text_content();
+        let Some(node) = self.get_node(node_id) else {
+            return;
+        };
+        let raw_styles = node.text_content();
         let sheet = self.make_stylesheet(raw_styles, Origin::Author);
         self.add_stylesheet_for_node(sheet, node_id);
+
+        if let Some(root) = self.root_element() {
+            root.set_restyle_hint(
+                style::invalidation::element::restyle_hints::RestyleHint::restyle_subtree(),
+            );
+        }
     }
 
     pub fn add_stylesheet_for_node(&mut self, stylesheet: DocumentStyleSheet, node_id: usize) {
@@ -1027,11 +1096,19 @@ impl BaseDocument {
             &self.net_provider,
             &self.shell_provider,
             &self.guard.read(),
-            self.abort_signal.as_ref(),
         );
 
         // Store data on element
-        let element = &mut self.nodes[node_id].element_data_mut().unwrap();
+        let Some(node) = self.get_node_mut(node_id) else {
+            return;
+        };
+        let Some(element) = node.element_data_mut() else {
+            debug_assert!(
+                false,
+                "add_stylesheet_for_node: node_id={node_id} is not an element"
+            );
+            return;
+        };
         element.special_data = SpecialElementData::Stylesheet(stylesheet.clone());
 
         // TODO: Nodes could potentially get reused so ordering by node_id might be wrong.
@@ -1054,7 +1131,7 @@ impl BaseDocument {
     }
 
     pub fn handle_messages(&mut self) {
-        // Remove event Reciever from the Document so that we can process events
+        // Remove event Receiver from the Document so that we can process events
         // without holding a borrow to the Document
         let rx = self.rx.take().unwrap();
 
@@ -1062,7 +1139,7 @@ impl BaseDocument {
             self.handle_message(msg);
         }
 
-        // Put Reciever back
+        // Put Receiver back
         self.rx = Some(rx);
     }
 
@@ -1072,36 +1149,10 @@ impl BaseDocument {
         }
     }
 
-    /// Whether the Document has pending requests for "critical" resources (that should block rendering)
-    pub fn has_pending_critical_resources(&self) -> bool {
-        !self.pending_critical_resources.is_empty()
-    }
-
     pub fn load_resource(&mut self, res: ResourceLoadResponse) {
-        self.pending_critical_resources.remove(&res.request_id);
-
-        let resource = match res.result {
-            Ok(resource) => resource,
-            Err(err) => {
-                if let Some(url) = res.resolved_url.as_ref() {
-                    let waiting_nodes = self.pending_images.remove(url).unwrap_or_default();
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(
-                        url = url.as_str(),
-                        waiting_nodes = waiting_nodes.len(),
-                        error = err.as_str(),
-                        "Resource load failed"
-                    );
-                    #[cfg(not(feature = "tracing"))]
-                    let _ = (waiting_nodes, err);
-                } else {
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(error = err.as_str(), "Resource load failed (no url)");
-                    #[cfg(not(feature = "tracing"))]
-                    let _ = err;
-                }
-                return;
-            }
+        let Ok(resource) = res.result else {
+            // TODO: handle error
+            return;
         };
 
         match resource {
@@ -1204,27 +1255,15 @@ impl BaseDocument {
                     }
                 }
             }
-            Resource::Font(bytes, overrides) => {
+            Resource::Font(bytes) => {
                 let font = Blob::new(Arc::new(bytes));
 
-                // Build a `FontInfoOverride` from the `@font-face` descriptors
-                // captured during stylesheet parsing. Without this, parley
-                // reads the family name from the TTF's own metadata, which
-                // means CSS `font-family: 'Avenir Book'` won't match a font
-                // file that internally identifies as `Avenir 45 Book`.
-                let weight_override = overrides.weight.map(parley::fontique::FontWeight::new);
-                let info_override = parley::fontique::FontInfoOverride {
-                    family_name: overrides.family_name.as_deref(),
-                    weight: weight_override,
-                    style: overrides.style,
-                    ..Default::default()
-                };
-
+                // TODO: Implement FontInfoOveride
                 // TODO: Investigate eliminating double-box
-                let mut global_font_ctx = self.font_ctx.lock().unwrap();
+                let mut global_font_ctx = self.font_ctx.lock().unwrap_or_else(|e| e.into_inner());
                 global_font_ctx
                     .collection
-                    .register_fonts(font.clone(), Some(info_override));
+                    .register_fonts(font.clone(), None);
 
                 #[cfg(feature = "parallel-construct")]
                 {
@@ -1233,9 +1272,7 @@ impl BaseDocument {
                             .thread_font_contexts
                             .get_or(|| RefCell::new(Box::new(global_font_ctx.clone())))
                             .borrow_mut();
-                        font_ctx
-                            .collection
-                            .register_fonts(font.clone(), Some(info_override));
+                        font_ctx.collection.register_fonts(font.clone(), None);
                     });
                 }
                 drop(global_font_ctx);
@@ -1250,7 +1287,9 @@ impl BaseDocument {
     }
 
     pub fn snapshot_node(&mut self, node_id: usize) {
-        let node = &mut self.nodes[node_id];
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
         let opaque_node_id = TNode::opaque(&&*node);
         node.has_snapshot = true;
         node.snapshot_handled
@@ -1311,26 +1350,38 @@ impl BaseDocument {
 
     pub fn snapshot_node_and(&mut self, node_id: usize, cb: impl FnOnce(&mut Node)) {
         self.snapshot_node(node_id);
-        cb(&mut self.nodes[node_id]);
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        cb(node);
     }
 
-    // Takes (x, y) co-ordinates (relative to the )
+    // Takes (x, y) co-ordinates (relative to the viewport)
     pub fn hit(&self, x: f32, y: f32) -> Option<HitResult> {
-        if TDocument::as_node(&&self.nodes[0])
-            .first_element_child()
-            .is_none()
-        {
-            #[cfg(feature = "tracing")]
-            tracing::warn!("No DOM - not resolving hit test");
-            return None;
-        }
-
-        self.root_element().hit(x, y)
+        // D-2c-followup: root_element widened to Option<&Node>; use `?` so a
+        // missing root element returns `None` instead of unwrap-panicking.
+        self.root_element()?.hit(x, y)
     }
 
     pub fn focus_next_node(&mut self) -> Option<usize> {
         let focussed_node_id = self.get_focussed_node_id()?;
-        let id = self.next_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?;
+        let focussed_node = self.get_node(focussed_node_id)?;
+        let id = self
+            .next_node(focussed_node, |node| node.is_focussable())
+            // Wrap around: when at the last focusable, continue from the document root
+            .or_else(|| self.next_node(self.root_node(), |node| node.is_focussable()))?;
+        self.set_focus_to(id);
+        Some(id)
+    }
+
+    /// Move focus to the previous focusable node in document order (reverse Tab).
+    pub fn focus_prev_node(&mut self) -> Option<usize> {
+        let focussed_node_id = self.get_focussed_node_id()?;
+        let focussed_node = self.get_node(focussed_node_id)?;
+        let id = self
+            .prev_node(focussed_node, |node| node.is_focussable())
+            // Wrap around: when at the first focusable, find the last focusable in the document
+            .or_else(|| self.prev_node(self.root_node(), |node| node.is_focussable()))?;
         self.set_focus_to(id);
         Some(id)
     }
@@ -1474,36 +1525,13 @@ impl BaseDocument {
     pub fn set_viewport(&mut self, viewport: Viewport) {
         let scale_has_changed = viewport.scale_f64() != self.viewport.scale_f64();
         self.viewport = viewport;
-        self.set_stylist_device(make_device(
-            &self.viewport,
-            self.media_type.clone(),
-            self.font_ctx.clone(),
-        ));
+        self.set_stylist_device(make_device(&self.viewport, self.font_ctx.clone()));
         self.scroll_viewport_by(0.0, 0.0); // Clamp scroll offset
 
         if scale_has_changed {
             self.invalidate_inline_contexts();
             self.shell_provider.request_redraw();
         }
-    }
-
-    /// Returns the current CSS media type used to evaluate `@media` rules.
-    pub fn media_type(&self) -> &MediaType {
-        &self.media_type
-    }
-
-    /// Sets the CSS media type used to evaluate `@media` rules (e.g. `screen` or `print`)
-    /// and rebuilds the stylist device so updated rules apply on the next restyle.
-    pub fn set_media_type(&mut self, media_type: MediaType) {
-        if self.media_type == media_type {
-            return;
-        }
-        self.media_type = media_type;
-        self.set_stylist_device(make_device(
-            &self.viewport,
-            self.media_type.clone(),
-            self.font_ctx.clone(),
-        ));
     }
 
     pub fn viewport(&self) -> &Viewport {
@@ -1537,15 +1565,9 @@ impl BaseDocument {
     }
 
     pub fn is_animating(&self) -> bool {
-        #[cfg(feature = "custom-widget")]
-        let has_custom_widgets = !self.custom_widget_nodes.is_empty();
-        #[cfg(not(feature = "custom-widget"))]
-        let has_custom_widgets = false;
-
         self.has_canvas
             | self.has_active_animations
             | self.subdoc_is_animating
-            | has_custom_widgets
             | (self.scroll_animation != ScrollAnimationState::None)
     }
 
@@ -1567,19 +1589,18 @@ impl BaseDocument {
     }
 
     pub fn get_cursor(&self) -> Option<CursorIcon> {
-        let node = &self.nodes[self.get_hover_node_id()?];
+        let node = self.get_node(self.get_hover_node_id()?)?;
 
         if let Some(subdoc) = node.subdoc().map(|doc| doc.inner()) {
             return subdoc.get_cursor();
         }
 
         let style = node.primary_styles()?;
-        let user_select = style.clone_user_select();
         let keyword = stylo_to_cursor_icon(style.clone_cursor().keyword);
 
         // Return cursor from style if it is non-auto
-        if let Some(cursor) = keyword {
-            return Some(cursor);
+        if keyword != CursorIcon::Default {
+            return Some(keyword);
         }
 
         // Return text cursor for text inputs
@@ -1602,10 +1623,7 @@ impl BaseDocument {
 
         // Return text cursor for text nodes
         if self.hover_node_is_text {
-            return Some(match user_select {
-                UserSelect::Text => CursorIcon::Text,
-                _ => CursorIcon::Default,
-            });
+            return Some(CursorIcon::Text);
         }
 
         // Else fallback to default cursor
@@ -1733,7 +1751,9 @@ impl BaseDocument {
 
     /// Scroll the viewport by the given values
     pub fn scroll_viewport_by_has_changed(&mut self, x: f64, y: f64) -> bool {
-        let content_size = self.root_element().final_layout.size;
+        // D-2c-followup: root_element widened to Option<&Node>; degrade to a
+        // default (zero) content size when no root element is mounted.
+        let content_size = self.root_element().map(|r| r.final_layout.size).unwrap_or_default();
         let new_scroll = (self.viewport_scroll.x - x, self.viewport_scroll.y - y);
         let window_width = self.viewport.window_size.0 as f64 / self.viewport.scale() as f64;
         let window_height = self.viewport.window_size.1 as f64 / self.viewport.scale() as f64;
@@ -1809,7 +1829,7 @@ impl BaseDocument {
             .element_data_mut()
             .and_then(|el| el.text_input_data_mut())
         {
-            let mut font_ctx = self.font_ctx.lock().unwrap();
+            let mut font_ctx = self.font_ctx.lock().unwrap_or_else(|e| e.into_inner());
             let layout_ctx = &mut self.layout_ctx;
             let driver = text_input.editor.driver(&mut font_ctx, layout_ctx);
             cb(driver)
@@ -2106,78 +2126,5 @@ impl AsRef<BaseDocument> for BaseDocument {
 impl AsMut<BaseDocument> for BaseDocument {
     fn as_mut(&mut self) -> &mut BaseDocument {
         self
-    }
-}
-
-#[cfg(test)]
-mod font_face_override_tests {
-    use super::*;
-    use crate::net::{FontFaceOverrides, Resource, ResourceLoadResponse};
-
-    /// Regression-pin for the `@font-face` descriptor-honouring fix.
-    ///
-    /// The bug was that `Resource::Font` carried only the raw font bytes,
-    /// so `load_resource` registered fonts with `info_override = None` and
-    /// parley fell back to the TTF's internal `name` table. After the fix,
-    /// `Resource::Font` carries `FontFaceOverrides` and `load_resource`
-    /// builds a `FontInfoOverride` from them — meaning a CSS-declared
-    /// `font-family` alias wins over the file's own metadata.
-    ///
-    /// We drive `load_resource` directly with a fabricated response rather
-    /// than go through HTML parsing → `fetch_font_face`, because the
-    /// downstream HTML parser lives in `bliss-html` (would be a circular
-    /// crate dependency). The mapping from `@font-face` descriptors into
-    /// `FontFaceOverrides` is covered by the unit tests in `net.rs`; this
-    /// test pins the load-side of the pipeline.
-    #[test]
-    fn font_face_overrides_alias_family_name() {
-        const ALIAS: &str = "AliasedFamily";
-
-        let mut document = BaseDocument::new(DocumentConfig::default());
-
-        // Sanity: the alias name is not registered before we feed the font.
-        {
-            let mut ctx = document.font_ctx.lock().unwrap();
-            assert!(
-                ctx.collection.family_id(ALIAS).is_none(),
-                "alias must not exist before registration",
-            );
-        }
-
-        // Drive `load_resource` with a `Resource::Font` whose overrides
-        // assert the CSS-side family name. We use the bullet font as a
-        // valid font payload — its internal `name` table is irrelevant to
-        // the assertion; what matters is whether the override wins.
-        let response = ResourceLoadResponse {
-            request_id: 0,
-            node_id: None,
-            resolved_url: Some(String::from("test://aliased-family")),
-            result: Ok(Resource::Font(
-                bliss_traits::net::Bytes::from_static(crate::BULLET_FONT),
-                FontFaceOverrides {
-                    family_name: Some(String::from(ALIAS)),
-                    weight: Some(800.0),
-                    style: Some(parley::fontique::FontStyle::Italic),
-                },
-            )),
-        };
-        document.load_resource(response);
-
-        // The override must have taken effect: parley's `Collection` now
-        // resolves the CSS-declared alias to a registered family.
-        let mut ctx = document.font_ctx.lock().unwrap();
-        let family_id = ctx
-            .collection
-            .family_id(ALIAS)
-            .expect("CSS-declared family name should be registered as a family alias");
-        let resolved_name = ctx
-            .collection
-            .family_name(family_id)
-            .expect("family id should resolve back to a name");
-        assert_eq!(
-            resolved_name, ALIAS,
-            "registered family should report the CSS-declared name, \
-             not the font file's internal `name` table entry",
-        );
     }
 }

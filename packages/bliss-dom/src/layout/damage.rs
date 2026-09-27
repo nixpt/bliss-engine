@@ -6,6 +6,7 @@ use crate::{
     BaseDocument, net::ImageHandler, node::BackgroundImageData, node::Status, util::ImageType,
 };
 use crate::{NON_INCREMENTAL, Node};
+use bliss_traits::net::Request;
 use style::properties::ComputedValues;
 use style::properties::generated::longhands::position::computed_value::T as Position;
 use style::selector_parser::RestyleDamage;
@@ -37,9 +38,7 @@ impl BaseDocument {
         node_id: usize,
         damage_from_parent: RestyleDamage,
     ) -> RestyleDamage {
-        let mut damage = if let Some(data) = self.nodes[node_id].stylo_element_data.get_mut() {
-            data.damage
-        } else {
+        let Some(mut damage) = self.nodes[node_id].damage() else {
             return RestyleDamage::empty();
         };
         damage |= damage_from_parent;
@@ -153,7 +152,6 @@ pub(crate) fn compute_layout_damage(old: &ComputedValues, new: &ComputedValues) 
         if old_box.display != new_box.display
             || old_box.float != new_box.float
             || old_box.position != new_box.position
-            || old.clone_visibility() != new.clone_visibility()
         {
             return true;
         }
@@ -353,7 +351,7 @@ impl BaseDocument {
                 }
             } else if let Some(input) = element.text_input_data_mut() {
                 input.editor.set_scale(scale);
-                let mut font_ctx = font_ctx.lock().unwrap();
+                let mut font_ctx = font_ctx.lock().unwrap_or_else(|e| e.into_inner());
                 input.editor.refresh_layout(&mut font_ctx, layout_ctx);
                 node.insert_damage(ONLY_RELAYOUT);
             }
@@ -384,7 +382,7 @@ impl BaseDocument {
         let display = {
             let node = self.nodes.get_mut(node_id).unwrap();
             let _damage = node.damage().unwrap_or(ALL_DAMAGE);
-            let stylo_element_data = node.stylo_element_data.get();
+            let stylo_element_data = node.stylo_element_data.borrow();
             let primary_styles = stylo_element_data
                 .as_ref()
                 .and_then(|data| data.styles.get_primary());
@@ -414,7 +412,7 @@ impl BaseDocument {
                             let old_bg_image = elem_bgs[idx].as_ref();
                             let old_bg_image_url = old_bg_image.map(|data| &data.url);
                             if old_bg_image_url.is_some_and(|old_url| **new_url == **old_url) {
-                                break;
+                                continue;
                             }
 
                             // Check cache first
@@ -447,10 +445,7 @@ impl BaseDocument {
 
                                 self.net_provider.fetch(
                                     doc_id,
-                                    crate::net::stamped_request(
-                                        (**new_url).clone(),
-                                        self.abort_signal.as_ref(),
-                                    ),
+                                    Request::get((**new_url).clone()),
                                     ResourceHandler::boxed(
                                         self.tx.clone(),
                                         doc_id,

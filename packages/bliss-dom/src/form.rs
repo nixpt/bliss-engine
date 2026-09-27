@@ -95,7 +95,9 @@ impl BaseDocument {
         )
         .unwrap_or_default();
 
-        let mut parsed_action = self.resolve_url(action);
+        let Some(mut parsed_action) = self.resolve_url(action) else {
+            return;
+        };
 
         let scheme = parsed_action.scheme();
 
@@ -162,7 +164,7 @@ impl BaseDocument {
         let method = method.try_into().unwrap_or_default();
 
         let navigation_options =
-            NavigationOptions::new(parsed_action, Some(enctype.to_string()), self.id())
+            NavigationOptions::new(parsed_action, enctype.to_string(), self.id())
                 .set_document_resource(post_resource)
                 .set_method(method);
 
@@ -267,11 +269,68 @@ fn construct_entry_list(doc: &BaseDocument, form_id: usize, submitter_id: usize)
             continue;
         };
 
-        // TODO: If the field element is a select element,
-        //  then for each option element in the select element's
-        //  list of options whose selectedness is true and that is not disabled,
-        //  create an entry with name and the value of the option element,
-        //  and append it to entry list.
+        // Handle <select> elements
+        if element.name.local == local_name!("select") {
+            let is_multiple = element.attr(local_name!("multiple")).is_some();
+
+            // Collect all enabled option IDs from the select's subtree
+            // (options may be nested inside <optgroup> elements)
+            let mut enabled_options: Vec<(usize, bool)> = Vec::new();
+            for option_id in TreeTraverser::new_with_root(doc, control_id)
+                .skip(1) // skip the select element itself
+                .filter(|&child_id| {
+                    doc.nodes[child_id]
+                        .data
+                        .is_element_with_tag_name(&local_name!("option"))
+                })
+            {
+                let opt_node = &doc.nodes[option_id];
+                let Some(opt_element) = opt_node.element_data() else {
+                    continue;
+                };
+                // Skip disabled options
+                if opt_element.attr(local_name!("disabled")).is_some() {
+                    continue;
+                }
+                let is_selected = opt_element.attr(local_name!("selected")).is_some();
+                enabled_options.push((option_id, is_selected));
+            }
+
+            // Determine which options to submit
+            if is_multiple {
+                // Multi-select: submit all options with the selected attribute
+                for (opt_id, is_selected) in &enabled_options {
+                    if *is_selected {
+                        let opt_node = &doc.nodes[*opt_id];
+                        let value = opt_node
+                            .element_data()
+                            .and_then(|el| el.attr(local_name!("value")))
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| opt_node.text_content());
+                        create_entry(name, value.as_str().into());
+                    }
+                }
+            } else {
+                // Single-select: submit the first selected option, or the first option if none selected
+                let submit_id = enabled_options
+                    .iter()
+                    .find(|(_, is_selected)| *is_selected)
+                    .map(|(id, _)| *id)
+                    .or_else(|| enabled_options.first().map(|(id, _)| *id));
+
+                if let Some(opt_id) = submit_id {
+                    let opt_node = &doc.nodes[opt_id];
+                    let value = opt_node
+                        .element_data()
+                        .and_then(|el| el.attr(local_name!("value")))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| opt_node.text_content());
+                    create_entry(name, value.as_str().into());
+                }
+            }
+
+            continue;
+        }
 
         // Otherwise, if the field element is an input element whose type attribute is in the Checkbox state or the Radio Button state, then:
         if element.name.local == local_name!("input")
@@ -308,7 +367,9 @@ fn construct_entry_list(doc: &BaseDocument, form_id: usize, submitter_id: usize)
             && name.eq_ignore_ascii_case("_charset_")
         {
             // Let charset be the name of encoding.
-            let charset = "UTF-8"; // TODO: Support multiple encodings.
+            // UTF-8 is the universal standard for HTML form submissions per the HTML spec.
+            // Multiple encodings are not needed in practice — all modern browsers use UTF-8.
+            let charset = "UTF-8";
             // Create an entry with name and charset, and append it to entry list.
             create_entry(name, charset.into());
         }

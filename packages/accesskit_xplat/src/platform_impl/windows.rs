@@ -7,7 +7,7 @@ use accesskit_windows::{HWND, SubclassingAdapter};
 use raw_window_handle::RawWindowHandle;
 
 pub struct Adapter {
-    adapter: SubclassingAdapter,
+    inner: Option<SubclassingAdapter>,
 }
 
 impl Adapter {
@@ -19,17 +19,19 @@ impl Adapter {
     ) -> Self {
         let hwnd = match window_handle {
             RawWindowHandle::Win32(handle) => handle.hwnd.get() as *mut _,
-            RawWindowHandle::WinRt(_) => unimplemented!(),
+            // WinRT handles are not supported — accessibility silently disabled.
+            RawWindowHandle::WinRt(_) => return Self { inner: None },
             _ => unreachable!(),
         };
-
-        let adapter = SubclassingAdapter::new(HWND(hwnd), activation_handler, action_handler);
-        Self { adapter }
+        let inner = SubclassingAdapter::new(HWND(hwnd), activation_handler, action_handler);
+        Self { inner: Some(inner) }
     }
 
     pub fn update_if_active(&mut self, updater: impl FnOnce() -> TreeUpdate) {
-        if let Some(events) = self.adapter.update_if_active(updater) {
-            events.raise();
+        if let Some(inner) = &mut self.inner {
+            if let Some(events) = inner.update_if_active(updater) {
+                events.raise();
+            }
         }
     }
 

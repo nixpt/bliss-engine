@@ -4,11 +4,11 @@ use crate::stylo_to_parley;
 use app_units::Au;
 use parley::{FontContext, FontVariation};
 use skrifa::MetadataProvider as _;
-use skrifa::charmap::Charmap;
+use skrifa::{Tag, charmap::Charmap};
 use style::properties::style_structs::Font as FontStyles;
 use style::{
-    device::servo::FontMetricsProvider,
     font_metrics::FontMetrics,
+    servo::media_queries::FontMetricsProvider,
     values::computed::{CSSPixelLength, font::QueryFontMetricsFlags},
 };
 
@@ -36,7 +36,7 @@ impl FontMetricsProvider for BlissFontMetricsProvider {
         use skrifa::metrics::{GlyphMetrics, Metrics};
 
         // Lock font_ctx. Explicit reborrow required for borrow checker.
-        let mut font_ctx = self.font_ctx.lock().unwrap();
+        let mut font_ctx = self.font_ctx.lock().unwrap_or_else(|e| e.into_inner());
         let font_ctx = &mut *font_ctx;
 
         // Query fontique for the font that matches the font styles
@@ -101,7 +101,7 @@ impl FontMetricsProvider for BlissFontMetricsProvider {
             let location = font_ref.axes().location(
                 variations
                     .iter()
-                    .map(|v| (skrifa::Tag::from_be_bytes(v.tag.to_bytes()), v.value)),
+                    .map(|v| (Tag::new(&v.tag.to_bytes()), v.value)),
             );
             let location_ref = LocationRef::from(&location);
             let glyph_metrics = GlyphMetrics::new(&font_ref, font_size, location_ref);
@@ -121,7 +121,7 @@ impl FontMetricsProvider for BlissFontMetricsProvider {
             let location = font_ref.axes().location(
                 variations
                     .iter()
-                    .map(|v| (skrifa::Tag::from_be_bytes(v.tag.to_bytes()), v.value)),
+                    .map(|v| (Tag::new(&v.tag.to_bytes()), v.value)),
             );
             let location_ref = LocationRef::from(&location);
             let metrics = Metrics::new(&font_ref, font_size, location_ref);

@@ -8,9 +8,6 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-#[cfg(target_os = "macos")]
-use winit::platform::macos::ApplicationHandlerExtMacOS;
-
 use crate::{View, WindowConfig};
 
 pub struct BlissApplication<Rend: WindowRenderer> {
@@ -49,15 +46,6 @@ impl<Rend: WindowRenderer> BlissApplication<Rend> {
                     window.poll();
                 };
             }
-            BlissShellEvent::ResumeReady { window_id } => {
-                // The renderer fires `on_ready` after it has sent on the
-                // channel, so `complete_resume` should always succeed here.
-                // If a stale event survives a suspend, dropping it is safe.
-                if let Some(window) = self.windows.get_mut(&window_id) {
-                    let ok = window.complete_resume();
-                    debug_assert!(ok, "ResumeReady received but renderer not ready");
-                }
-            }
             BlissShellEvent::RequestRedraw { doc_id } => {
                 // TODO: Handle multiple documents per window
                 if let Some(window) = self.window_mut_by_doc_id(doc_id) {
@@ -90,12 +78,6 @@ impl<Rend: WindowRenderer> BlissApplication<Rend> {
             BlissShellEvent::NavigationLoad { .. } => {
                 // Do nothing. Should be handled by embedders (if required).
             }
-            #[cfg(target_arch = "wasm32")]
-            BlissShellEvent::ResizeSettleCheck { window_id } => {
-                if let Some(window) = self.windows.get_mut(&window_id) {
-                    window.apply_pending_resize_if_settled();
-                }
-            }
         }
     }
 }
@@ -107,13 +89,13 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlissApplication<Rend> {
             view.resume();
         }
 
-        // Initialise pending windows. The renderer's resume is non-blocking —
-        // on native it finishes inline, on wasm32 it spawns a future that will
-        // dispatch BlissShellEvent::ResumeReady when init completes. Either way
-        // we insert the view immediately so the event handler can find it.
+        // Initialise pending windows
         for window_config in self.pending_windows.drain(..) {
             let mut view = View::init(window_config, event_loop, &self.proxy);
             view.resume();
+            if !view.renderer.is_active() {
+                continue;
+            }
             self.windows.insert(view.window_id(), view);
         }
     }
@@ -163,32 +145,4 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlissApplication<Rend> {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn macos_handler(&mut self) -> Option<&mut dyn ApplicationHandlerExtMacOS> {
-        Some(self)
-    }
-
-    #[cfg(target_os = "ios")]
-    fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        for view in self.windows.values_mut() {
-            if view.ios_request_redraw.get() {
-                view.window.request_redraw();
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl<Rend: WindowRenderer> ApplicationHandlerExtMacOS for BlissApplication<Rend> {
-    fn standard_key_binding(
-        &mut self,
-        _event_loop: &dyn ActiveEventLoop,
-        window_id: WindowId,
-        action: &str,
-    ) {
-        if let Some(window) = self.windows.get_mut(&window_id) {
-            window.handle_apple_standard_keybinding(action);
-            self.proxy.send_event(BlissShellEvent::Poll { window_id });
-        }
-    }
 }

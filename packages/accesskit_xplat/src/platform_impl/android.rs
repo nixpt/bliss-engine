@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (found in
 // the LICENSE-APACHE file).
 
-use accesskit::{ActionHandler, ActivationHandler, DeactivationHandler, TreeUpdate};
+use accesskit::{ActionHandler, ActivationHandler, DeactivationHandler, Rect, TreeUpdate};
 use accesskit_android::{
     InjectingAdapter,
     jni::{JavaVM, objects::JObject},
@@ -21,7 +21,10 @@ impl Adapter {
         _deactivation_handler: impl 'static + DeactivationHandler,
     ) -> Self {
         let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr() as *mut _) }.unwrap();
-        let mut env = vm.get_env().unwrap();
+        let mut env = vm.attach_current_thread().unwrap_or_else(|_| {
+            vm.get_env()
+                .expect("Failed to attach to JVM or get JNI environment")
+        });
         let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _) };
         let view = env
             .get_field(
@@ -40,7 +43,7 @@ impl Adapter {
         self.adapter.update_if_active(updater);
     }
 
-    pub fn set_focus(&mut self, is_focused: bool) {}
+    pub fn set_focus(&mut self, _is_focused: bool) {}
 
-    pub fn set_window_bounds(&mut self, outer_bounds: Rect, inner_bounds: Rect) {}
+    pub fn set_window_bounds(&mut self, _outer_bounds: Rect, _inner_bounds: Rect) {}
 }

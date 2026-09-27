@@ -63,7 +63,6 @@ pub enum UiEvent {
     KeyUp(BlissKeyEvent),
     KeyDown(BlissKeyEvent),
     Ime(BlissImeEvent),
-    AppleStandardKeybinding(SmolStr),
 }
 impl UiEvent {
     pub fn discriminant(&self) -> u8 {
@@ -141,7 +140,7 @@ pub enum DomEventKind {
     FocusIn,
     FocusOut,
 
-    AppleStandardKeybinding,
+    Submit,
 }
 impl DomEventKind {
     pub fn discriminant(self) -> u8 {
@@ -185,6 +184,8 @@ impl FromStr for DomEventKind {
             "blur" => Ok(Self::Blur),
             "focusin" => Ok(Self::FocusIn),
             "focusout" => Ok(Self::FocusOut),
+
+            "submit" => Ok(Self::Submit),
             _ => Err(()),
         }
     }
@@ -227,7 +228,7 @@ pub enum DomEventData {
     FocusIn(BlissFocusEvent),
     FocusOut(BlissFocusEvent),
 
-    AppleStandardKeybinding(SmolStr),
+    Submit(BlissSubmitEvent),
 }
 impl DomEventData {
     pub fn discriminant(&self) -> u8 {
@@ -276,7 +277,7 @@ impl DomEventData {
             Self::FocusIn { .. } => "focusin",
             Self::FocusOut { .. } => "focusout",
 
-            Self::AppleStandardKeybinding { .. } => "applekeybinding",
+            Self::Submit { .. } => "submit",
         }
     }
 
@@ -316,7 +317,7 @@ impl DomEventData {
             Self::FocusIn { .. } => DomEventKind::FocusIn,
             Self::FocusOut { .. } => DomEventKind::FocusOut,
 
-            Self::AppleStandardKeybinding { .. } => DomEventKind::AppleStandardKeybinding,
+            Self::Submit { .. } => DomEventKind::Submit,
         }
     }
 
@@ -356,7 +357,7 @@ impl DomEventData {
             Self::FocusIn { .. } => false,
             Self::FocusOut { .. } => false,
 
-            Self::AppleStandardKeybinding { .. } => true,
+            Self::Submit { .. } => true,
         }
     }
 
@@ -396,7 +397,7 @@ impl DomEventData {
             Self::FocusIn { .. } => true,
             Self::FocusOut { .. } => true,
 
-            Self::AppleStandardKeybinding { .. } => false,
+            Self::Submit { .. } => true,
         }
     }
 }
@@ -647,6 +648,11 @@ pub struct BlissInputEvent {
 
 #[derive(Clone, Debug)]
 pub struct BlissFocusEvent;
+
+#[derive(Clone, Debug)]
+pub struct BlissSubmitEvent {
+    pub submitter_id: usize,
+}
 
 /// Copy of Winit IME event to avoid lower-level Bliss crates depending on winit
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

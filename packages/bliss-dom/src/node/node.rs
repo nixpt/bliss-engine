@@ -1,3 +1,4 @@
+use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use bitflags::bitflags;
 use bliss_traits::events::{
     BlissPointerEvent, BlissPointerId, DomEventData, HitResult, PointerCoords,
@@ -5,14 +6,12 @@ use bliss_traits::events::{
 use bliss_traits::shell::ShellProvider;
 use html_escape::encode_quoted_attribute_to_string;
 use keyboard_types::Modifiers;
-use kurbo::Affine;
 use markup5ever::{LocalName, local_name};
 use parley::{BreakReason, Cluster, ClusterSide};
 use selectors::matching::ElementSelectorFlags;
 use slab::Slab;
 use std::cell::{Cell, RefCell};
 use std::fmt::Write;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use style::Atom;
@@ -20,11 +19,10 @@ use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::ComputedValues;
 use style::properties::generated::longhands::position::computed_value::T as Position;
 use style::selector_parser::{PseudoElement, RestyleDamage};
-use style::servo_arc::Arc as ServoArc;
-use style::shared_lock::SharedRwLock;
 use style::stylesheets::UrlExtraData;
 use style::values::computed::Display as StyloDisplay;
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
+use style::{data::ElementData as StyloElementData, shared_lock::SharedRwLock};
 use style_dom::ElementState;
 use style_traits::values::ToCss;
 use taffy::{
@@ -33,9 +31,9 @@ use taffy::{
 };
 
 use crate::Document;
+use crate::document::BaseDocument;
 use crate::layout::damage::HoistedPaintChildren;
 
-use super::stylo_data::StyloData;
 use super::{Attribute, ElementData};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,19 +79,27 @@ impl NodeFlags {
 }
 
 pub struct Node {
-    /// Back-pointer to the slab that owns this node, used by [`tree()`](Self::tree)
-    /// and traversal helpers (`forward()`, `backward()`, `hit()`, etc.) to walk
-    /// sibling/parent nodes without taking `&BaseDocument` as a parameter on
+    /// Raw pointer back to the owning `Slab<Node>`. Enables node-level tree traversal
+    /// (e.g. `child_index()`, `forward()`, `hit()`) without threading `&Slab<Node>` through
     /// every method. The pointer is set once at creation and never changes.
     ///
     /// # Safety
-    /// - This is a `*const` pointer because we only ever create shared references
-    ///   (`&Slab<Node>`) via `tree()`, never mutable references. This eliminates
-    ///   potential aliasing concerns under Stacked Borrows.
-    /// - The `Slab<Node>` must outlive all `Node`s it contains (guaranteed by
-    ///   `Box<Slab<Node>>` ownership in `BaseDocument`).
+    /// - This is a `*const` pointer because we only ever create shared references (`&Slab<Node>`)
+    ///   via `tree()`, never mutable references. This eliminates potential aliasing concerns.
+    /// - The `Slab<Node>` must outlive all `Node`s it contains (guaranteed by `Box<Slab<Node>>`
+    ///   ownership in `BaseDocument`).
     /// - The pointer is set during `Node::new()` and never modified thereafter.
     tree: *const Slab<Node>,
+
+    /// Pointer to the owning BaseDocument. Enables Stylo trait implementations (like
+    /// TShadowRoot::style_data) to access document-level data (cascade data, scoped stylesheets)
+    /// directly from a Node reference without threading &BaseDocument through every call site.
+    ///
+    /// # Safety
+    /// - This is a `*const` pointer. We only ever read the BaseDocument through shared references.
+    /// - The BaseDocument must outlive all its Nodes (guaranteed by ownership in BaseDocument).
+    /// - The pointer is set once at creation via `create_node()` and never modified.
+    doc: *const BaseDocument,
 
     /// Our Id
     pub id: usize,
@@ -101,7 +107,7 @@ pub struct Node {
     pub parent: Option<usize>,
     // What are our children?
     pub children: Vec<usize>,
-    /// Our parent in the layout hierachy: a separate list that includes anonymous collections of inline elements
+    /// Our parent in the layout hierarchy: a separate list that includes anonymous collections of inline elements
     pub layout_parent: Cell<Option<usize>>,
     /// A separate child list that includes anonymous collections of inline elements
     pub layout_children: RefCell<Option<Vec<usize>>>,
@@ -117,15 +123,10 @@ pub struct Node {
 
     // This little bundle of joy is our style data from stylo and a lock guard that allows access to it
     // TODO: See if guard can be hoisted to a higher level
-    pub stylo_element_data: StyloData,
-    pub selector_flags: Cell<ElementSelectorFlags>,
+    pub stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
+    pub selector_flags: AtomicRefCell<ElementSelectorFlags>,
     pub guard: SharedRwLock,
     pub element_state: ElementState,
-    pub has_snapshot: bool,
-    pub snapshot_handled: AtomicBool,
-    /// Whether any descendant of this node needs restyling.
-    /// Used by Stylo's incremental style traversal to skip unchanged subtrees.
-    pub dirty_descendants: AtomicBool,
 
     // Pseudo element nodes
     pub before: Option<usize>,
@@ -133,37 +134,75 @@ pub struct Node {
 
     // Taffy layout data:
     pub style: Style<Atom>,
+    pub has_snapshot: bool,
+    pub snapshot_handled: AtomicBool,
+    /// Whether any descendant of this node needs restyling.
+    /// Used by Stylo's incremental style traversal to skip unchanged subtrees.
+    pub dirty_descendants: AtomicBool,
     pub display_constructed_as: StyloDisplay,
     pub cache: Cache,
     pub unrounded_layout: Layout,
     pub final_layout: Layout,
     pub scroll_offset: crate::Point<f64>,
-
-    pub transform: Option<Affine>,
 }
 
-// SAFETY: `Node` contains `Cell` and `RefCell` fields (`layout_parent`,
-// `layout_children`, `paint_children`) which are `!Sync`, and a raw `*const
-// Slab<Node>` pointer.
+// SAFETY: `Node` contains `Cell` and `RefCell` fields (`layout_parent`, `layout_children`,
+// `paint_children`) which are `!Sync`, and a raw `*const Slab<Node>` pointer.
 //
-// `*const` pointers are `Send + Sync`, so the pointer itself doesn't prevent
-// these impls. The soundness concerns are about the `Cell`/`RefCell` fields.
+// `*const` pointers are `Send + Sync`, so the pointer itself doesn't prevent these impls.
+// The soundness concerns are about the `Cell`/`RefCell` fields.
 //
-// These impls are required for the `parallel-construct` feature which uses
-// Rayon to parallelize inline layout construction across threads via shared
-// `&Slab<Node>` references.
+// These impls are required for the `parallel-construct` feature which uses Rayon to parallelize
+// inline layout construction across threads via shared `&Slab<Node>` references.
 //
-// Soundness argument: during parallel construction, each Rayon worker thread
-// borrows the slab immutably via `tree()` and never mutates `Cell`/`RefCell`
-// state on nodes it didn't allocate. The single-threaded write phase happens
-// before the parallel read phase (typical map-then-reduce pattern), so there
-// is no concurrent mutation of any single `Node`.
+// Soundness argument:
+// - The parallel path (`resolve_deferred_tasks`) only reads node data through shared references.
+//   The `Cell`/`RefCell` fields are not mutated during parallel iteration.
+// - The raw slab pointer is only dereferenced to create `&Slab<Node>` (shared refs) via `tree()`.
+//   Using `*const` instead of `*mut` expresses this intent at the type level.
+//
+// Known risks:
+// - These are blanket impls that promise thread safety for ALL uses of `Node`, not just the
+//   parallel layout path. Any future code that mutates `Cell`/`RefCell` fields from multiple
+//   threads would be UB.
+// - The long-term plan is to extract data needed by the parallel path into separate structures,
+//   eliminating the need for `Node: Sync`. See KNOWN_ISSUES.md for details.
 unsafe impl Send for Node {}
+
+// SAFETY: `Node: Sync` is required for the `parallel-construct` feature which uses Rayon
+// to parallelize inline layout construction. Rayon's parallel iterators require closures
+// to be `Sync`, and closures that capture `&Slab<Node>` therefore require `Slab<Node>: Sync`,
+// which transitively requires `Node: Sync`.
+//
+// This impl is sound because:
+//
+// 1. **Parallel path is read-only**: The parallel construction in `resolve_deferred_tasks()`
+//    only reads node data through shared `&Node` references. The `Cell`/`RefCell` fields
+//    (`layout_parent`, `layout_children`, `paint_children`) are NOT mutated during parallel
+//    iteration - all mutation happens on the main thread before/after the parallel section.
+//
+// 2. **Raw pointer is `*const`**: The slab pointer is `*const Slab<Node>` (not `*mut`),
+//    expressing that we only ever create shared references via `tree()`. This eliminates
+//    the aliasing concern from S2 in KNOWN_ISSUES.md.
+//
+// 3. **Document lifecycle**: A `BaseDocument` is only ever accessed from a single thread at
+//    a time. The parallel construction happens within a single `resolve()` call on the main
+//    thread, using Rayon's work-stealing to distribute read-only work across a thread pool.
+//
+// **CRITICAL INVARIANTS** (must be maintained for soundness):
+// - Never mutate `Cell`/`RefCell` fields in `Node` from multiple threads concurrently
+// - Never mutate the `Slab<Node>` (add/remove nodes) while parallel iteration is active
+// - The parallel construction path must remain read-only with respect to `Node` fields
+//
+// The long-term plan (see KNOWN_ISSUES.md S1) is to extract the data needed by the parallel
+// path into separate `ConstructionTask` structs *before* entering the parallel section,
+// eliminating the need for this unsafe impl entirely.
 unsafe impl Sync for Node {}
 
 impl Node {
     pub(crate) fn new(
         tree: *const Slab<Node>,
+        doc: *const BaseDocument,
         id: usize,
         guard: SharedRwLock,
         data: NodeData,
@@ -186,6 +225,7 @@ impl Node {
 
         Self {
             tree,
+            doc,
 
             id,
             parent: None,
@@ -199,7 +239,7 @@ impl Node {
             data,
 
             stylo_element_data: Default::default(),
-            selector_flags: Cell::new(ElementSelectorFlags::empty()),
+            selector_flags: AtomicRefCell::new(ElementSelectorFlags::empty()),
             guard,
             element_state: state,
 
@@ -215,8 +255,6 @@ impl Node {
             unrounded_layout: Layout::new(),
             final_layout: Layout::new(),
             scroll_offset: crate::Point::ZERO,
-
-            transform: None,
         }
     }
 
@@ -224,7 +262,7 @@ impl Node {
         match index {
             0 => self.after,
             1 => self.before,
-            _ => panic!("Invalid pseudo element index"),
+            _ => None,
         }
     }
 
@@ -232,7 +270,7 @@ impl Node {
         match index {
             0 => self.after = value,
             1 => self.before = value,
-            _ => panic!("Invalid pseudo element index"),
+            _ => {},
         }
     }
 
@@ -288,8 +326,8 @@ impl Node {
             .unwrap_or(false)
     }
 
-    pub fn set_restyle_hint(&mut self, hint: RestyleHint) {
-        if let Some(mut element_data) = self.stylo_element_data.get_mut() {
+    pub fn set_restyle_hint(&self, hint: RestyleHint) {
+        if let Some(element_data) = self.stylo_element_data.borrow_mut().as_mut() {
             element_data.hint.insert(hint);
         }
         // Mark all ancestors as having dirty descendants so the style traversal
@@ -312,14 +350,6 @@ impl Node {
         self.dirty_descendants.store(false, Ordering::Relaxed);
     }
 
-    /// Set appropriate damage for Stylo when an element's style attribute is updated
-    pub(crate) fn mark_style_attr_updated(&mut self) {
-        if let Some(mut data) = self.stylo_element_data.get_mut() {
-            data.hint |= RestyleHint::RESTYLE_STYLE_ATTRIBUTE;
-        }
-        self.set_dirty_descendants();
-    }
-
     /// Marks all ancestors of this node as having dirty descendants.
     /// This propagates the dirty flag up the tree so that the style traversal
     /// knows to visit the subtree containing this node.
@@ -336,36 +366,45 @@ impl Node {
         }
     }
 
-    // pub fn damage_mut(&mut self) -> Option<&mut RestyleDamage> {
-    //     self.stylo_element_data
-    //         .get_mut()
-    //         .map(|mut data: ElementDataMut<'a>| &'a mut data.damage)
-    // }
-
-    pub fn damage(&self) -> Option<RestyleDamage> {
-        self.stylo_element_data.get().map(|data| data.damage)
+    pub fn damage_mut(&self) -> Option<AtomicRefMut<'_, RestyleDamage>> {
+        let element_data = self.stylo_element_data.borrow_mut();
+        #[allow(clippy::manual_map, reason = "false positive")]
+        match *element_data {
+            Some(_) => Some(AtomicRefMut::map(
+                element_data,
+                |data: &mut Option<StyloElementData>| &mut data.as_mut().unwrap().damage,
+            )),
+            None => None,
+        }
     }
 
-    pub fn set_damage(&mut self, damage: RestyleDamage) {
-        if let Some(mut data) = self.stylo_element_data.get_mut() {
+    pub fn damage(&mut self) -> Option<RestyleDamage> {
+        self.stylo_element_data
+            .get_mut()
+            .as_ref()
+            .map(|data| data.damage)
+    }
+
+    pub fn set_damage(&self, damage: RestyleDamage) {
+        if let Some(data) = self.stylo_element_data.borrow_mut().as_mut() {
             data.damage = damage;
         }
     }
 
     pub fn insert_damage(&mut self, damage: RestyleDamage) {
-        if let Some(mut data) = self.stylo_element_data.get_mut() {
+        if let Some(data) = self.stylo_element_data.get_mut().as_mut() {
             data.damage |= damage;
         }
     }
 
-    pub fn remove_damage(&mut self, damage: RestyleDamage) {
-        if let Some(mut data) = self.stylo_element_data.get_mut() {
+    pub fn remove_damage(&self, damage: RestyleDamage) {
+        if let Some(data) = self.stylo_element_data.borrow_mut().as_mut() {
             data.damage.remove(damage);
         }
     }
 
     pub fn clear_damage_mut(&mut self) {
-        if let Some(mut data) = self.stylo_element_data.get_mut() {
+        if let Some(data) = self.stylo_element_data.get_mut() {
             data.damage = RestyleDamage::empty();
         }
     }
@@ -484,7 +523,11 @@ impl Node {
         {
             if !input_data.is_multiline {
                 let content_box_height = self.final_layout.content_box_height();
-                let input_height = input_data.editor.try_layout().unwrap().height() / scale as f32;
+                let input_height = input_data
+                    .editor
+                    .try_layout()
+                    .map(|layout| layout.height() / scale as f32)
+                    .unwrap_or(0.0);
                 let y_offset = ((content_box_height - input_height) / 2.0).max(0.0);
 
                 return y_offset as f64;
@@ -521,8 +564,12 @@ pub enum NodeData {
 
     /// A comment.
     Comment,
-    // Comment { contents: String },
 
+    /// A shadow root (hosts a separate DOM tree for web components).
+    ShadowRoot {
+        /// The node ID of the host element.
+        host: usize,
+    },
     // /// A `DOCTYPE` with name, public id, and system id. See
     // /// [document type declaration on wikipedia][https://en.wikipedia.org/wiki/Document_type_declaration]
     // Doctype { name: String, public_id: String, system_id: String },
@@ -575,6 +622,7 @@ impl NodeData {
             NodeData::AnonymousBlock(_) => NodeKind::AnonymousBlock,
             NodeData::Text(_) => NodeKind::Text,
             NodeData::Comment => NodeKind::Comment,
+            NodeData::ShadowRoot { .. } => NodeKind::Element,
         }
     }
 }
@@ -616,6 +664,15 @@ impl TextNodeData {
 // }
 
 impl Node {
+    /// Returns a shared reference to the owning BaseDocument.
+    ///
+    /// # Safety
+    /// The `doc` pointer is set once at node creation and points to the BaseDocument that owns
+    /// the node (via `Slab<Node>`). The BaseDocument is guaranteed to outlive all its nodes.
+    pub fn doc(&self) -> &BaseDocument {
+        unsafe { &*self.doc }
+    }
+
     pub fn tree(&self) -> &Slab<Node> {
         unsafe { &*self.tree }
     }
@@ -679,6 +736,17 @@ impl Node {
         matches!(self.data, NodeData::Element { .. })
     }
 
+    pub fn is_shadow_root(&self) -> bool {
+        matches!(self.data, NodeData::ShadowRoot { .. })
+    }
+
+    pub fn shadow_host(&self) -> Option<usize> {
+        match self.data {
+            NodeData::ShadowRoot { host } => Some(host),
+            _ => None,
+        }
+    }
+
     pub fn is_anonymous(&self) -> bool {
         matches!(self.data, NodeData::AnonymousBlock { .. })
     }
@@ -738,6 +806,7 @@ impl Node {
                 // &std::str::from_utf8(data.contents.as_bytes().split_at(10).0).unwrap_or("INVALID UTF8")
             ),
             NodeData::AnonymousBlock(_) => write!(s, "AnonymousBlock"),
+            NodeData::ShadowRoot { host } => write!(s, "#shadow-root (host={host})"),
             NodeData::Element(data) => {
                 let name = &data.name;
                 let class = self.attr(local_name!("class")).unwrap_or("");
@@ -778,6 +847,7 @@ impl Node {
             NodeData::Document => {}
             NodeData::Comment => {}
             NodeData::AnonymousBlock(_) => {}
+            NodeData::ShadowRoot { .. } => {}
             // NodeData::Doctype { name, .. } => write!(s, "DOCTYPE {name}"),
             NodeData::Text(data) => {
                 writer.push_str(data.content.as_str());
@@ -828,8 +898,22 @@ impl Node {
         Some(&attr.value)
     }
 
-    pub fn primary_styles(&self) -> Option<impl Deref<Target = ServoArc<ComputedValues>>> {
-        self.stylo_element_data.primary_styles()
+    pub fn primary_styles(&self) -> Option<AtomicRef<'_, ComputedValues>> {
+        let stylo_element_data = self.stylo_element_data.borrow();
+        if stylo_element_data
+            .as_ref()
+            .and_then(|d| d.styles.get_primary())
+            .is_some()
+        {
+            Some(AtomicRef::map(
+                stylo_element_data,
+                |data: &Option<StyloElementData>| -> &ComputedValues {
+                    data.as_ref().unwrap().styles.get_primary().unwrap()
+                },
+            ))
+        } else {
+            None
+        }
     }
 
     pub fn text_content(&self) -> String {
@@ -843,7 +927,7 @@ impl Node {
             NodeData::Text(data) => {
                 out.push_str(&data.content);
             }
-            NodeData::Element(..) | NodeData::AnonymousBlock(..) => {
+            NodeData::Element(..) | NodeData::AnonymousBlock(..) | NodeData::ShadowRoot { .. } => {
                 for child_id in self.children.iter() {
                     self.with(*child_id).write_text_content(out);
                 }
@@ -896,13 +980,59 @@ impl Node {
             return true;
         }
 
-        // TODO: mix-blend-mode
-        // TODO: transforms
-        // TODO: filter
-        // TODO: clip-path
-        // TODO: mask
-        // TODO: isolation
-        // TODO: contain
+        // According to CSS spec, the following properties also create stacking contexts
+        // https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context
+
+        // mix-blend-mode other than normal creates a stacking context
+        {
+            use style::properties::longhands::mix_blend_mode::computed_value::T as MixBlendMode;
+            if !matches!(style.clone_mix_blend_mode(), MixBlendMode::Normal) {
+                return true;
+            }
+        }
+
+        // Any transform value other than none creates a stacking context
+        {
+            use style::values::computed::transform::Transform as StyloTransform;
+            if style.clone_transform() != StyloTransform::none() {
+                return true;
+            }
+        }
+
+        // Any filter value other than none creates a stacking context
+        if !style.clone_filter().0.is_empty() {
+            return true;
+        }
+
+        // isolation: isolate creates a stacking context
+        {
+            use style::properties::longhands::isolation::computed_value::T as Isolation;
+            if matches!(style.clone_isolation(), Isolation::Isolate) {
+                return true;
+            }
+        }
+
+        // contain with paint or layout creates a stacking context
+        {
+            use style::properties::longhands::contain::computed_value::T as Contain;
+            let contain = style.clone_contain();
+            if contain.intersects(Contain::PAINT) {
+                return true;
+            }
+        }
+
+        // clip-path other than none creates a stacking context
+        {
+            use style::values::computed::basic_shape::ClipPath as StyloClipPath;
+            if !matches!(style.clone_clip_path(), StyloClipPath::None) {
+                return true;
+            }
+        }
+
+        // mask-image other than none creates a stacking context
+        if !style.clone_mask_image().0.is_empty() {
+            return true;
+        }
 
         false
     }
@@ -1002,7 +1132,9 @@ impl Node {
 
         // Inline children
         if self.flags.is_inline_root() {
-            let element_data = &self.element_data().unwrap();
+            let Some(element_data) = self.element_data() else {
+                return None;
+            };
             if let Some(ild) = element_data.inline_layout_data.as_ref() {
                 let layout = &ild.layout;
                 let scale = layout.scale();

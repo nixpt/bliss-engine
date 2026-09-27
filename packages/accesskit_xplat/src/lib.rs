@@ -172,7 +172,6 @@ impl ActionHandler for CombinedHandler {
 }
 
 pub struct Adapter {
-    /// A user-supplied ID that we pass back to
     inner: platform_impl::Adapter,
 }
 

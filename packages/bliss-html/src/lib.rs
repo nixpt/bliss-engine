@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_if)]
-
 mod html_document;
 mod html_sink;
 

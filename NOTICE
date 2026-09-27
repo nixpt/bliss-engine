@@ -1,0 +1,42 @@
+Bliss Engine
+Copyright 2026 Exosphere Team
+
+Bliss Engine is dual-licensed under MIT OR Apache-2.0 (LICENSE-MIT,
+LICENSE-APACHE), except where a crate states otherwise below. It
+incorporates third-party source, whose original copyright and license
+terms are preserved here.
+
+==============================================================================
+Bliss rendering stack — forked from Blitz
+==============================================================================
+
+packages/bliss, packages/bliss-dom, packages/bliss-html, packages/bliss-net,
+packages/bliss-paint, packages/bliss-shell, packages/bliss-traits,
+packages/stylo_taffy, packages/accesskit_xplat
+
+These crates are a hard fork of Blitz by Dioxus Labs.
+
+  Upstream:   https://github.com/DioxusLabs/blitz
+  Copyright:  Dioxus Labs and the Blitz contributors
+  License:    MIT OR Apache-2.0
+              stylo_taffy: MIT OR Apache-2.0 OR MPL-2.0 (LICENSE-MPL)
+              accesskit_xplat (published as bliss-accesskit-xplat):
+              Apache-2.0 (packages/accesskit_xplat/LICENSE-APACHE)
+
+Blitz in turn builds on Servo's Stylo CSS engine (MPL-2.0), DioxusLabs Taffy
+and Linebender's Parley and Vello (used as dependencies). The checkbox tick
+drawing in packages/bliss-paint/src/render/form_controls.rs is derived from
+Linebender Masonry (https://github.com/linebender/xilem, Apache-2.0), as
+inherited from upstream Blitz.
+
+==============================================================================
+anyrender_vello (published as bliss-anyrender-vello)
+==============================================================================
+
+packages/anyrender_vello is forked from the anyrender_vello crate, with
+SceneOverlay/set_scene_effects hooks added for Bliss's mustang GPU
+post-processor (blur/transform CSS effects) — see src/window_renderer.rs.
+
+  Upstream:   https://github.com/DioxusLabs/anyrender
+  Copyright:  Dioxus Labs and the anyrender contributors
+  License:    MIT OR Apache-2.0

@@ -69,19 +69,13 @@ impl BaseDocument {
         let resolved_line_height = font_styles.map(|s| s.1);
 
         match &mut node.data {
-            NodeData::Text(data) => {
+            NodeData::Text(_data) => {
                 // With the new "inline context" architecture all text nodes should be wrapped in an "inline layout context"
                 // and should therefore never be measured individually.
-                #[cfg(feature = "tracing")]
-                tracing::error!(
-                    node_id = usize::from(node_id),
-                    data = ?data,
-                    "Tried to lay out text node individually",
+                eprintln!(
+                    "bliss-dom: text node {} laid out individually (should be wrapped in inline context)",
+                    usize::from(node_id)
                 );
-
-                #[cfg(not(feature = "tracing"))]
-                let _ = data;
-
                 taffy::LayoutOutput::HIDDEN
                 // unreachable!();
 
@@ -162,11 +156,7 @@ impl BaseDocument {
                                 &node.style,
                                 resolve_calc_value,
                                 |_known_size, _available_space| taffy::Size {
-                                    width: match inputs.available_space.width {
-                                        AvailableSpace::Definite(limit) => limit.min(300.0),
-                                        AvailableSpace::MinContent => 0.0,
-                                        AvailableSpace::MaxContent => 300.0,
-                                    },
+                                    width: 300.0,
                                     height: resolved_line_height.unwrap_or(16.0),
                                 },
                             );
@@ -211,7 +201,11 @@ impl BaseDocument {
                         },
                         SpecialElementData::Canvas(_) => taffy::Size::ZERO,
                         SpecialElementData::None => taffy::Size::ZERO,
-                        _ => unreachable!(),
+                        _ => {
+                            // Unexpected special_data on img/canvas/svg element —
+                            // malformed DOM. Fall back to zero-size.
+                            taffy::Size::ZERO
+                        }
                     };
 
                     let replaced_context = ReplacedContext {
@@ -239,15 +233,17 @@ impl BaseDocument {
                 }
 
                 if node.flags.is_table_root() {
-                    let SpecialElementData::TableRoot(context) = &self.nodes[node_id.into()]
-                        .data
-                        .downcast_element()
-                        .unwrap()
-                        .special_data
-                    else {
-                        panic!("Node marked as table root but doesn't have TableContext");
+                    let Some(el) = self.nodes[node_id.into()].data.downcast_element() else {
+                        // Element marked as table root but can't downcast —
+                        // malformed DOM. Skip table layout gracefully.
+                        return taffy::LayoutOutput::HIDDEN;
                     };
-                    let context = Arc::clone(context);
+                    let SpecialElementData::TableRoot(ref ctx) = el.special_data else {
+                        // Node is marked as table root but has no TableContext —
+                        // malformed DOM. Skip table layout gracefully.
+                        return taffy::LayoutOutput::HIDDEN;
+                    };
+                    let context = Arc::clone(ctx);
 
                     let mut table_wrapper = TableTreeWrapper {
                         doc: self,
@@ -361,9 +357,7 @@ impl taffy::CacheTree for BaseDocument {
         inputs: &taffy::LayoutInput,
         layout_output: taffy::LayoutOutput,
     ) {
-        self.node_from_id_mut(node_id)
-            .cache
-            .store(inputs, layout_output);
+        self.node_from_id_mut(node_id).cache.store(inputs, layout_output);
     }
 
     #[inline]
@@ -465,6 +459,7 @@ impl PrintTree for BaseDocument {
             NodeData::Text { .. } => node.node_debug_str().leak(),
             NodeData::Comment => "COMMENT",
             NodeData::AnonymousBlock(_) => "ANONYMOUS BLOCK",
+            NodeData::ShadowRoot { .. } => "SHADOW ROOT",
             NodeData::Element(_) => {
                 let display = match style.display {
                     Display::Flex => match style.flex_direction {

@@ -2,26 +2,16 @@
 //!
 //! Provides an implementation of the [`bliss_traits::net::NetProvider`] trait.
 
+// use bliss_traits::net::{Body, Bytes, NetHandler, NetProvider, NetWaker, Request};
 use bliss_traits::net::{AbortSignal, Body, Bytes, NetHandler, NetProvider, NetWaker, Request};
 use data_url::DataUrl;
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    pin::Pin,
-    sync::{Arc, Mutex},
-    task::Poll,
-};
-use tokio::sync::Semaphore;
+use std::{marker::PhantomData, pin::Pin, sync::Arc, task::Poll};
+use tokio::runtime::Handle;
 
 #[cfg(feature = "cache")]
 use http_cache_reqwest::{CACacheManager, Cache, CacheMode, HttpCache, HttpCacheOptions};
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/81.0";
-
-/// Matches real browsers' per-origin cap of 6.
-const PER_HOST_MAX_CONCURRENT: usize = 6;
-
-type HostLimits = Arc<Mutex<HashMap<String, Arc<Semaphore>>>>;
 
 #[cfg(feature = "cache")]
 type Client = reqwest_middleware::ClientWithMiddleware;
@@ -40,33 +30,14 @@ fn get_cache_path() -> std::path::PathBuf {
         .expect("Failed to find cache directory")
         .cache_dir()
         .to_owned();
-    #[cfg(feature = "tracing")]
-    tracing::info!(path = ?path.display(), "Using cache dir");
+    println!("Using cache dir {}", path.display());
     path
 }
 
-#[cfg(target_arch = "wasm32")]
-fn spawn(fut: impl Future + 'static) {
-    wasm_bindgen_futures::spawn_local(async move {
-        fut.await;
-    });
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn spawn<F>(fut: F)
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    tokio::spawn(fut);
-}
-
 pub struct Provider {
+    rt: Handle,
     client: Client,
     waker: Arc<dyn NetWaker>,
-    per_host_limits: HostLimits,
-    #[cfg(feature = "cache")]
-    cache_manager: CACacheManager,
 }
 impl Provider {
     pub fn new(waker: Option<Arc<dyn NetWaker>>) -> Self {
@@ -76,24 +47,19 @@ impl Provider {
         let client = builder.build().unwrap();
 
         #[cfg(feature = "cache")]
-        let cache_manager = CACacheManager::new(get_cache_path(), true);
-
-        #[cfg(feature = "cache")]
         let client = reqwest_middleware::ClientBuilder::new(client)
             .with(Cache(HttpCache {
                 mode: CacheMode::Default,
-                manager: cache_manager.clone(),
+                manager: CACacheManager::new(get_cache_path(), true),
                 options: HttpCacheOptions::default(),
             }))
             .build();
 
         let waker = waker.unwrap_or(Arc::new(DummyNetWaker));
         Self {
+            rt: Handle::current(),
             client,
             waker,
-            per_host_limits: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(feature = "cache")]
-            cache_manager,
         }
     }
     pub fn shared(waker: Option<Arc<dyn NetWaker>>) -> Arc<dyn NetProvider> {
@@ -105,89 +71,35 @@ impl Provider {
     pub fn count(&self) -> usize {
         Arc::strong_count(&self.waker) - 1
     }
-
-    #[cfg(feature = "cache")]
-    pub async fn clear_cache(&self) {
-        if let Err(e) = self.cache_manager.clear().await {
-            #[cfg(feature = "tracing")]
-            tracing::error!("Failed to clear HTTP cache: {:?}", e);
-            #[cfg(not(feature = "tracing"))]
-            let _ = e;
-        }
-    }
 }
 impl Provider {
     async fn fetch_inner(
         client: Client,
         request: Request,
-        per_host_limits: HostLimits,
     ) -> Result<(String, Bytes), ProviderError> {
-        match request.url.scheme() {
+        Ok(match request.url.scheme() {
             "data" => {
                 let data_url = DataUrl::process(request.url.as_str())?;
                 let decoded = data_url.decode_to_vec()?;
-                Ok((request.url.to_string(), Bytes::from(decoded.0)))
+                (request.url.to_string(), Bytes::from(decoded.0))
             }
             "file" => {
                 let file_content = std::fs::read(request.url.path())?;
-                Ok((request.url.to_string(), Bytes::from(file_content)))
+                (request.url.to_string(), Bytes::from(file_content))
             }
-            _ => Self::fetch_http(client, request, per_host_limits).await,
-        }
-    }
+            _ => {
+                let response = client
+                    .request(request.method, request.url)
+                    .headers(request.headers)
+                    .header("Content-Type", request.content_type.as_str())
+                    .header("User-Agent", USER_AGENT)
+                    .apply_body(request.body, request.content_type.as_str())
+                    .await
+                    .send()
+                    .await?;
 
-    async fn fetch_http(
-        client: Client,
-        request: Request,
-        per_host_limits: HostLimits,
-    ) -> Result<(String, Bytes), ProviderError> {
-        // Acquire a per-host permit, held for the duration of the request, to
-        // keep total in-flight requests per origin bounded.
-        let host_key = request
-            .url
-            .host_str()
-            .map(str::to_owned)
-            .unwrap_or_default();
-        let semaphore = {
-            let mut map = per_host_limits.lock().unwrap();
-            map.entry(host_key)
-                .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST_MAX_CONCURRENT)))
-                .clone()
-        };
-        let _permit = semaphore
-            .acquire()
-            .await
-            .expect("per-host semaphore was closed");
-
-        let mut req = client
-            .request(request.method, request.url)
-            .headers(request.headers)
-            .header("User-Agent", USER_AGENT);
-
-        if let Some(content_type) = request.content_type.as_ref() {
-            req = req.header("Content-Type", content_type);
-        }
-
-        let req = req
-            .apply_body(request.body, request.content_type.as_deref())
-            .await;
-        let response = req.send().await?;
-        let status = response.status();
-        let final_url = response.url().to_string();
-
-        if status.is_success() {
-            return Ok((final_url, response.bytes().await?));
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::warn!(
-            url = final_url.as_str(),
-            status = status.as_u16(),
-            "HTTP error status"
-        );
-        Err(ProviderError::HttpStatus {
-            status,
-            url: final_url,
+                (response.url().to_string(), response.bytes().await?)
+            }
         })
     }
 
@@ -197,21 +109,18 @@ impl Provider {
         request: Request,
         callback: Box<dyn FnOnce(Result<(String, Bytes), ProviderError>) + Send + Sync + 'static>,
     ) {
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "debug_log")]
         let url = request.url.to_string();
 
         let client = self.client.clone();
-        let per_host_limits = self.per_host_limits.clone();
-        spawn(async move {
-            let result = Self::fetch_inner(client, request, per_host_limits).await;
+        self.rt.spawn(async move {
+            let result = Self::fetch_inner(client, request).await;
 
-            #[cfg(feature = "tracing")]
+            #[cfg(feature = "debug_log")]
             if let Err(e) = &result {
-                #[cfg(feature = "tracing")]
-                tracing::error!(url = url.as_str(), error = ?e, "Fetching");
+                eprintln!("Error fetching {url}: {e:?}");
             } else {
-                #[cfg(feature = "tracing")]
-                tracing::info!(url = url.as_str(), "Success fetching");
+                println!("Success {url}");
             }
 
             callback(result);
@@ -219,20 +128,17 @@ impl Provider {
     }
 
     pub async fn fetch_async(&self, request: Request) -> Result<(String, Bytes), ProviderError> {
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "debug_log")]
         let url = request.url.to_string();
 
         let client = self.client.clone();
-        let per_host_limits = self.per_host_limits.clone();
-        let result = Self::fetch_inner(client, request, per_host_limits).await;
+        let result = Self::fetch_inner(client, request).await;
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "debug_log")]
         if let Err(e) = &result {
-            #[cfg(feature = "tracing")]
-            tracing::error!(url = url.as_str(), error = ?e, "Fetching");
+            eprintln!("Error fetching {url}: {e:?}");
         } else {
-            #[cfg(feature = "tracing")]
-            tracing::info!(url = url.as_str(), "Success fetching");
+            println!("Success {url}");
         }
 
         result
@@ -242,41 +148,39 @@ impl Provider {
 impl NetProvider for Provider {
     fn fetch(&self, doc_id: usize, mut request: Request, handler: Box<dyn NetHandler>) {
         let client = self.client.clone();
-        let per_host_limits = self.per_host_limits.clone();
 
-        #[cfg(feature = "tracing")]
-        tracing::info!(url = request.url.as_str(), "Fetching");
+        #[cfg(feature = "debug_log")]
+        println!("Fetching {}", &request.url);
 
         let waker = self.waker.clone();
-        spawn(async move {
-            #[cfg(feature = "tracing")]
+        self.rt.spawn(async move {
+            #[cfg(feature = "debug_log")]
             let url = request.url.to_string();
 
             let signal = request.signal.take();
             let result = if let Some(signal) = signal {
                 AbortFetch::new(
                     signal,
-                    Box::pin(
-                        async move { Self::fetch_inner(client, request, per_host_limits).await },
-                    ),
+                    Box::pin(async move { Self::fetch_inner(client, request).await }),
                 )
                 .await
             } else {
-                Self::fetch_inner(client, request, per_host_limits).await
+                Self::fetch_inner(client, request).await
             };
 
+            // Call the waker to notify of completed network request
             waker.wake(doc_id);
 
             match result {
                 Ok((response_url, bytes)) => {
                     handler.bytes(response_url, bytes);
-                    #[cfg(feature = "tracing")]
-                    tracing::info!(url = url.as_str(), "Success fetching");
+                    #[cfg(feature = "debug_log")]
+                    println!("Success {url}");
                 }
                 Err(e) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::error!(url = url.as_str(), error = ?e, "Error fetching");
-                    #[cfg(not(feature = "tracing"))]
+                    #[cfg(feature = "debug_log")]
+                    eprintln!("Error fetching {url}: {e:?}");
+                    #[cfg(not(feature = "debug_log"))]
                     let _ = e;
                 }
             };
@@ -284,6 +188,7 @@ impl NetProvider for Provider {
     }
 }
 
+/// A future that is cancellable using an AbortSignal
 struct AbortFetch<F, T> {
     signal: AbortSignal,
     future: F,
@@ -302,8 +207,8 @@ impl<F, T> AbortFetch<F, T> {
 
 impl<F, T> Future for AbortFetch<F, T>
 where
-    F: Future + Unpin + 'static,
-    F::Output: Into<Result<T, ProviderError>> + 'static,
+    F: Future + Unpin + Send + 'static,
+    F::Output: Send + Into<Result<T, ProviderError>> + 'static,
     T: Unpin,
 {
     type Output = Result<T, ProviderError>;
@@ -332,25 +237,6 @@ pub enum ProviderError {
     ReqwestError(reqwest::Error),
     #[cfg(feature = "cache")]
     ReqwestMiddlewareError(reqwest_middleware::Error),
-    HttpStatus {
-        status: reqwest::StatusCode,
-        url: String,
-    },
-}
-
-impl std::fmt::Display for ProviderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Abort => write!(f, "request aborted"),
-            Self::Io(e) => write!(f, "io error: {e}"),
-            Self::DataUrl(e) => write!(f, "data url error: {e:?}"),
-            Self::DataUrlBase64(e) => write!(f, "data url base64 error: {e:?}"),
-            Self::ReqwestError(e) => write!(f, "reqwest error: {e}"),
-            #[cfg(feature = "cache")]
-            Self::ReqwestMiddlewareError(e) => write!(f, "reqwest middleware error: {e}"),
-            Self::HttpStatus { status, url } => write!(f, "HTTP {status} for {url}"),
-        }
-    }
 }
 
 impl From<std::io::Error> for ProviderError {
@@ -385,16 +271,16 @@ impl From<reqwest_middleware::Error> for ProviderError {
 }
 
 trait ReqwestExt {
-    async fn apply_body(self, body: Body, content_type: Option<&str>) -> Self;
+    async fn apply_body(self, body: Body, content_type: &str) -> Self;
 }
 impl ReqwestExt for RequestBuilder {
-    async fn apply_body(self, body: Body, content_type: Option<&str>) -> Self {
+    async fn apply_body(self, body: Body, content_type: &str) -> Self {
         match body {
             Body::Bytes(bytes) => self.body(bytes),
             Body::Form(form_data) => match content_type {
-                Some("application/x-www-form-urlencoded") => self.form(&form_data),
+                "application/x-www-form-urlencoded" => self.form(&form_data),
                 #[cfg(feature = "multipart")]
-                Some("multipart/form-data") => {
+                "multipart/form-data" => {
                     use bliss_traits::net::Entry;
                     use bliss_traits::net::EntryValue;
                     let mut form_data = form_data;

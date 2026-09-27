@@ -5,7 +5,6 @@ pub(crate) mod stylo {
     pub(crate) use style::Atom;
     pub(crate) use style::properties::ComputedValues;
     pub(crate) use style::properties::generated::longhands::box_sizing::computed_value::T as BoxSizing;
-    pub(crate) use style::properties::generated::longhands::direction::computed_value::T as Direction;
     pub(crate) use style::properties::longhands::aspect_ratio::computed_value::T as AspectRatio;
     pub(crate) use style::properties::longhands::position::computed_value::T as Position;
     pub(crate) use style::values::computed::length_percentage::CalcLengthPercentage;
@@ -74,9 +73,7 @@ macro_rules! log_fallback {
 
 #[cfg(not(feature = "tracing"))]
 macro_rules! log_fallback {
-    ($value:expr, $to:expr) => {
-        let _ = (&$value, &$to);
-    };
+    ($value:expr, $to:expr) => {};
 }
 
 /// Converts a Stylo LengthPercentage to a Taffy LengthPercentage.
@@ -259,8 +256,8 @@ pub fn display(input: stylo::Display) -> taffy::Display {
         // TODO: Support table layout in Taffy
         #[cfg(feature = "grid")]
         stylo::DisplayInside::Table => taffy::Display::Grid,
-        unsupported => {
-            log_fallback!(&format!("display:{:?}", unsupported), "DEFAULT");
+        _ => {
+            log_fallback!("unsupported display value", "DEFAULT");
             taffy::Display::DEFAULT
         }
     };
@@ -354,14 +351,6 @@ pub fn overflow(input: stylo::Overflow) -> taffy::Overflow {
 /// Returns `None` for `aspect-ratio: auto` or if the denominator is zero
 /// (which shouldn't happen in valid CSS but is handled defensively).
 #[inline]
-pub fn direction(input: stylo::Direction) -> taffy::Direction {
-    match input {
-        stylo::Direction::Ltr => taffy::Direction::Ltr,
-        stylo::Direction::Rtl => taffy::Direction::Rtl,
-    }
-}
-
-#[inline]
 pub fn aspect_ratio(input: stylo::AspectRatio) -> Option<f32> {
     match input.ratio {
         stylo::PreferredRatio::None => None,
@@ -382,17 +371,17 @@ pub fn content_alignment(input: stylo::ContentDistribution) -> Option<taffy::Ali
     match input.primary().value() {
         stylo::AlignFlags::NORMAL => None,
         stylo::AlignFlags::AUTO => None,
-        stylo::AlignFlags::START => Some(taffy::AlignContent::Start),
-        stylo::AlignFlags::END => Some(taffy::AlignContent::End),
-        stylo::AlignFlags::LEFT => Some(taffy::AlignContent::Start),
-        stylo::AlignFlags::RIGHT => Some(taffy::AlignContent::End),
-        stylo::AlignFlags::FLEX_START => Some(taffy::AlignContent::FlexStart),
-        stylo::AlignFlags::STRETCH => Some(taffy::AlignContent::Stretch),
-        stylo::AlignFlags::FLEX_END => Some(taffy::AlignContent::FlexEnd),
-        stylo::AlignFlags::CENTER => Some(taffy::AlignContent::Center),
-        stylo::AlignFlags::SPACE_BETWEEN => Some(taffy::AlignContent::SpaceBetween),
-        stylo::AlignFlags::SPACE_AROUND => Some(taffy::AlignContent::SpaceAround),
-        stylo::AlignFlags::SPACE_EVENLY => Some(taffy::AlignContent::SpaceEvenly),
+        stylo::AlignFlags::START => Some(taffy::AlignContent::START),
+        stylo::AlignFlags::END => Some(taffy::AlignContent::END),
+        stylo::AlignFlags::LEFT => Some(taffy::AlignContent::START),
+        stylo::AlignFlags::RIGHT => Some(taffy::AlignContent::END),
+        stylo::AlignFlags::FLEX_START => Some(taffy::AlignContent::FLEX_START),
+        stylo::AlignFlags::STRETCH => Some(taffy::AlignContent::STRETCH),
+        stylo::AlignFlags::FLEX_END => Some(taffy::AlignContent::FLEX_END),
+        stylo::AlignFlags::CENTER => Some(taffy::AlignContent::CENTER),
+        stylo::AlignFlags::SPACE_BETWEEN => Some(taffy::AlignContent::SPACE_BETWEEN),
+        stylo::AlignFlags::SPACE_AROUND => Some(taffy::AlignContent::SPACE_AROUND),
+        stylo::AlignFlags::SPACE_EVENLY => Some(taffy::AlignContent::SPACE_EVENLY),
         // Should never be hit. But no real reason to panic here.
         _ => None,
     }
@@ -402,18 +391,18 @@ pub fn content_alignment(input: stylo::ContentDistribution) -> Option<taffy::Ali
 pub fn item_alignment(input: stylo::AlignFlags) -> Option<taffy::AlignItems> {
     match input.value() {
         stylo::AlignFlags::AUTO => None,
-        stylo::AlignFlags::NORMAL => Some(taffy::AlignItems::Stretch),
-        stylo::AlignFlags::STRETCH => Some(taffy::AlignItems::Stretch),
-        stylo::AlignFlags::FLEX_START => Some(taffy::AlignItems::FlexStart),
-        stylo::AlignFlags::FLEX_END => Some(taffy::AlignItems::FlexEnd),
-        stylo::AlignFlags::SELF_START => Some(taffy::AlignItems::Start),
-        stylo::AlignFlags::SELF_END => Some(taffy::AlignItems::End),
-        stylo::AlignFlags::START => Some(taffy::AlignItems::Start),
-        stylo::AlignFlags::END => Some(taffy::AlignItems::End),
-        stylo::AlignFlags::LEFT => Some(taffy::AlignItems::Start),
-        stylo::AlignFlags::RIGHT => Some(taffy::AlignItems::End),
-        stylo::AlignFlags::CENTER => Some(taffy::AlignItems::Center),
-        stylo::AlignFlags::BASELINE => Some(taffy::AlignItems::Baseline),
+        stylo::AlignFlags::NORMAL => Some(taffy::AlignItems::STRETCH),
+        stylo::AlignFlags::STRETCH => Some(taffy::AlignItems::STRETCH),
+        stylo::AlignFlags::FLEX_START => Some(taffy::AlignItems::FLEX_START),
+        stylo::AlignFlags::FLEX_END => Some(taffy::AlignItems::FLEX_END),
+        stylo::AlignFlags::SELF_START => Some(taffy::AlignItems::START),
+        stylo::AlignFlags::SELF_END => Some(taffy::AlignItems::END),
+        stylo::AlignFlags::START => Some(taffy::AlignItems::START),
+        stylo::AlignFlags::END => Some(taffy::AlignItems::END),
+        stylo::AlignFlags::LEFT => Some(taffy::AlignItems::START),
+        stylo::AlignFlags::RIGHT => Some(taffy::AlignItems::END),
+        stylo::AlignFlags::CENTER => Some(taffy::AlignItems::CENTER),
+        stylo::AlignFlags::BASELINE => Some(taffy::AlignItems::BASELINE),
         // Should never be hit. But no real reason to panic here.
         _ => None,
     }
@@ -729,6 +718,7 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
 
     taffy::Style {
         dummy: core::marker::PhantomData,
+        direction: taffy::Direction::Ltr,
         display: self::display(display),
         box_sizing: self::box_sizing(style.clone_box_sizing()),
         item_is_table: display.inside() == stylo::DisplayInside::Table,
@@ -738,7 +728,6 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
             x: self::overflow(style.clone_overflow_x()),
             y: self::overflow(style.clone_overflow_y()),
         },
-        direction: self::direction(style.clone_direction()),
         scrollbar_width: 0.0,
 
         #[cfg(feature = "floats")]
@@ -858,5 +847,220 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
             start: self::grid_line(&pos.grid_column_start),
             end: self::grid_line(&pos.grid_column_end),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::stylo;
+
+    // ── box_sizing ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn box_sizing_border_box() {
+        assert_eq!(box_sizing(stylo::BoxSizing::BorderBox), taffy::BoxSizing::BorderBox);
+    }
+
+    #[test]
+    fn box_sizing_content_box() {
+        assert_eq!(box_sizing(stylo::BoxSizing::ContentBox), taffy::BoxSizing::ContentBox);
+    }
+
+    // ── position ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn position_relative() {
+        assert_eq!(position(stylo::Position::Relative), taffy::Position::Relative);
+    }
+
+    #[test]
+    fn position_absolute() {
+        assert_eq!(position(stylo::Position::Absolute), taffy::Position::Absolute);
+    }
+
+    #[test]
+    fn position_static_falls_back_to_relative() {
+        assert_eq!(position(stylo::Position::Static), taffy::Position::Relative);
+    }
+
+    #[test]
+    fn position_fixed_falls_back_to_absolute() {
+        assert_eq!(position(stylo::Position::Fixed), taffy::Position::Absolute);
+    }
+
+    #[test]
+    fn position_sticky_falls_back_to_relative() {
+        assert_eq!(position(stylo::Position::Sticky), taffy::Position::Relative);
+    }
+
+    // ── overflow ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn overflow_visible() {
+        assert_eq!(overflow(stylo::Overflow::Visible), taffy::Overflow::Visible);
+    }
+
+    #[test]
+    fn overflow_clip() {
+        assert_eq!(overflow(stylo::Overflow::Clip), taffy::Overflow::Clip);
+    }
+
+    #[test]
+    fn overflow_hidden() {
+        assert_eq!(overflow(stylo::Overflow::Hidden), taffy::Overflow::Hidden);
+    }
+
+    #[test]
+    fn overflow_scroll() {
+        assert_eq!(overflow(stylo::Overflow::Scroll), taffy::Overflow::Scroll);
+    }
+
+    #[test]
+    fn overflow_auto_falls_back_to_scroll() {
+        assert_eq!(overflow(stylo::Overflow::Auto), taffy::Overflow::Scroll);
+    }
+
+    // ── flex_direction ──────────────────────────────────────────────────────
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_direction_row() {
+        assert_eq!(flex_direction(stylo::FlexDirection::Row), taffy::FlexDirection::Row);
+    }
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_direction_column() {
+        assert_eq!(flex_direction(stylo::FlexDirection::Column), taffy::FlexDirection::Column);
+    }
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_direction_row_reverse() {
+        assert_eq!(flex_direction(stylo::FlexDirection::RowReverse), taffy::FlexDirection::RowReverse);
+    }
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_direction_column_reverse() {
+        assert_eq!(flex_direction(stylo::FlexDirection::ColumnReverse), taffy::FlexDirection::ColumnReverse);
+    }
+
+    // ── flex_wrap ───────────────────────────────────────────────────────────
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_wrap_wrap() {
+        assert_eq!(flex_wrap(stylo::FlexWrap::Wrap), taffy::FlexWrap::Wrap);
+    }
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_wrap_nowrap() {
+        assert_eq!(flex_wrap(stylo::FlexWrap::Nowrap), taffy::FlexWrap::NoWrap);
+    }
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn flex_wrap_wrap_reverse() {
+        assert_eq!(flex_wrap(stylo::FlexWrap::WrapReverse), taffy::FlexWrap::WrapReverse);
+    }
+
+    // ── float ───────────────────────────────────────────────────────────────
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn float_left() {
+        assert_eq!(float(stylo::Float::Left), taffy::Float::Left);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn float_right() {
+        assert_eq!(float(stylo::Float::Right), taffy::Float::Right);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn float_none() {
+        assert_eq!(float(stylo::Float::None), taffy::Float::None);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn float_inline_start_maps_to_left() {
+        assert_eq!(float(stylo::Float::InlineStart), taffy::Float::Left);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn float_inline_end_maps_to_right() {
+        assert_eq!(float(stylo::Float::InlineEnd), taffy::Float::Right);
+    }
+
+    // ── clear ───────────────────────────────────────────────────────────────
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn clear_left() {
+        assert_eq!(clear(stylo::Clear::Left), taffy::Clear::Left);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn clear_right() {
+        assert_eq!(clear(stylo::Clear::Right), taffy::Clear::Right);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn clear_both() {
+        assert_eq!(clear(stylo::Clear::Both), taffy::Clear::Both);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn clear_none() {
+        assert_eq!(clear(stylo::Clear::None), taffy::Clear::None);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn clear_inline_start_maps_to_left() {
+        assert_eq!(clear(stylo::Clear::InlineStart), taffy::Clear::Left);
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn clear_inline_end_maps_to_right() {
+        assert_eq!(clear(stylo::Clear::InlineEnd), taffy::Clear::Right);
+    }
+
+    // ── grid_auto_flow ──────────────────────────────────────────────────────
+
+    #[cfg(feature = "grid")]
+    #[test]
+    fn grid_auto_flow_row() {
+        assert_eq!(grid_auto_flow(stylo::GridAutoFlow::ROW), taffy::GridAutoFlow::Row);
+    }
+
+    #[cfg(feature = "grid")]
+    #[test]
+    fn grid_auto_flow_column() {
+        assert_eq!(grid_auto_flow(stylo::GridAutoFlow::empty()), taffy::GridAutoFlow::Column);
+    }
+
+    #[cfg(feature = "grid")]
+    #[test]
+    fn grid_auto_flow_row_dense() {
+        let flags = stylo::GridAutoFlow::ROW | stylo::GridAutoFlow::DENSE;
+        assert_eq!(grid_auto_flow(flags), taffy::GridAutoFlow::RowDense);
+    }
+
+    #[cfg(feature = "grid")]
+    #[test]
+    fn grid_auto_flow_column_dense() {
+        assert_eq!(grid_auto_flow(stylo::GridAutoFlow::DENSE), taffy::GridAutoFlow::ColumnDense);
     }
 }

@@ -373,7 +373,14 @@ fn resolve_color_stops<T>(
         match hint {
             None => gradient.stops.push(peniko::ColorStop { color, offset }),
             Some(hint) => {
-                let &last_stop = gradient.stops.last().unwrap();
+                let last_stop = match gradient.stops.last().copied() {
+                    Some(stop) => stop,
+                    None => {
+                        // Empty stops — malformed CSS gradient. Skip the hint.
+                        gradient.stops.push(peniko::ColorStop { color, offset });
+                        continue;
+                    }
+                };
 
                 if hint <= last_stop.offset {
                     // Upstream code has a bug here, so we're going to do something different
@@ -448,8 +455,8 @@ fn resolve_color_stops<T>(
 
     // Post-process the stops for repeating gradients
     if repeating && gradient.stops.len() > 1 {
-        let first_offset = gradient.stops.first().unwrap().offset;
-        let last_offset = gradient.stops.last().unwrap().offset;
+        let first_offset = gradient.stops.first().map(|s| s.offset).unwrap_or(0.0);
+        let last_offset = gradient.stops.last().map(|s| s.offset).unwrap_or(1.0);
         if first_offset != 0.0 || last_offset != 1.0 {
             let scale_inv = 1e-7_f32.max(1.0 / (last_offset - first_offset));
             for stop in &mut *gradient.stops {
@@ -459,12 +466,11 @@ fn resolve_color_stops<T>(
         (first_offset, last_offset)
     } else {
         // Ensure that the gradient ends at offset 1.0
-        if gradient.stops.len() > 1 {
-            let last_stop = &gradient.stops.last().unwrap();
+        if let Some(last_stop) = gradient.stops.last() {
             if last_stop.offset < 1.0 {
                 let last_stop = ColorStop {
                     offset: 1.0,
-                    ..(**last_stop)
+                    ..(*last_stop)
                 };
                 gradient.stops.push(last_stop);
             }

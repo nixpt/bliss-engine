@@ -9,7 +9,7 @@ use bliss_traits::events::{DomEvent, DomEventData, PointerCoords, UiEvent};
 pub use driver::{EventDriver, EventHandler, NoopEventHandler};
 use focus::generate_focus_events;
 pub(crate) use ime::handle_ime_event;
-use keyboard::{KeyboardOrTextInputEvent, handle_key_or_input_event};
+pub(crate) use keyboard::handle_keypress;
 pub(crate) use pointer::{DragMode, ScrollAnimationState};
 use pointer::{handle_click, handle_pointerdown, handle_pointermove, handle_pointerup};
 
@@ -26,113 +26,73 @@ fn adjust_coords_for_subdocument(
     coords.client_y -= offset.y;
 }
 
-fn map_dom_event_to_ui_event(
-    event: &mut DomEvent,
-    node_offset: Point<f32>,
-    viewport_scroll: Point<f64>,
-) -> Option<UiEvent> {
-    // TODO: eliminate clone
-    match event.data.clone() {
-        DomEventData::PointerMove(mut event) => {
-            adjust_coords_for_subdocument(&mut event.coords, node_offset, viewport_scroll);
-            Some(UiEvent::PointerMove(event))
-        }
-        DomEventData::PointerDown(mut event) => {
-            adjust_coords_for_subdocument(&mut event.coords, node_offset, viewport_scroll);
-            Some(UiEvent::PointerDown(event))
-        }
-        DomEventData::PointerUp(mut event) => {
-            adjust_coords_for_subdocument(&mut event.coords, node_offset, viewport_scroll);
-            Some(UiEvent::PointerUp(event))
-        }
-
-        // Enter/leave events will be recreated by sub-document's event driver
-        // based move events
-        DomEventData::PointerEnter(_) => None,
-        DomEventData::PointerLeave(_) => None,
-        DomEventData::PointerOver(_) => None,
-        DomEventData::PointerOut(_) => None,
-
-        // Mouse events will be recreated by sub-document's event driver
-        // based pointer events
-        DomEventData::MouseMove(_) => None,
-        DomEventData::MouseDown(_) => None,
-        DomEventData::MouseUp(_) => None,
-        DomEventData::MouseEnter(_) => None,
-        DomEventData::MouseLeave(_) => None,
-        DomEventData::MouseOver(_) => None,
-        DomEventData::MouseOut(_) => None,
-
-        DomEventData::KeyDown(data) => Some(UiEvent::KeyDown(data)),
-        DomEventData::KeyUp(data) => Some(UiEvent::KeyUp(data)),
-        DomEventData::Ime(data) => Some(UiEvent::Ime(data)),
-        DomEventData::AppleStandardKeybinding(data) => Some(UiEvent::AppleStandardKeybinding(data)),
-
-        DomEventData::KeyPress(_) => None,
-        DomEventData::Click(_) => None,
-        DomEventData::ContextMenu(_) => None,
-        DomEventData::DoubleClick(_) => None,
-        DomEventData::Input(_) => None,
-        DomEventData::Wheel(data) => Some(UiEvent::Wheel(data)),
-        DomEventData::Scroll(_) => None,
-        DomEventData::Focus(_) => None,
-        DomEventData::Blur(_) => None,
-        DomEventData::FocusIn(_) => None,
-        DomEventData::FocusOut(_) => None,
-    }
-}
-
 pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
     doc: &mut BaseDocument,
     event: &mut DomEvent,
     mut dispatch_event: F,
 ) {
     let target_node_id = event.target;
+
+    // Handle forwarding event sub-document
     let node = &mut doc.nodes[target_node_id];
     let pos = node.absolute_position(0.0, 0.0);
-
-    // Handle event forwarding for sub-document
+    let mut set_focus = false;
     if let Some(sub_doc) = node.subdoc_mut() {
         let viewport_scroll = sub_doc.inner().viewport_scroll();
+        // TODO: eliminate clone
+        let ui_event = match event.data.clone() {
+            DomEventData::PointerMove(mut event) => {
+                adjust_coords_for_subdocument(&mut event.coords, pos, viewport_scroll);
+                Some(UiEvent::PointerMove(event))
+            }
+            DomEventData::PointerDown(mut event) => {
+                adjust_coords_for_subdocument(&mut event.coords, pos, viewport_scroll);
+                set_focus = true;
+                Some(UiEvent::PointerDown(event))
+            }
+            DomEventData::PointerUp(mut event) => {
+                adjust_coords_for_subdocument(&mut event.coords, pos, viewport_scroll);
+                set_focus = true;
+                Some(UiEvent::PointerUp(event))
+            }
 
-        let set_focus = matches!(
-            &event.data,
-            DomEventData::PointerDown(_) | DomEventData::PointerUp(_)
-        );
-        let ui_event = map_dom_event_to_ui_event(event, pos, viewport_scroll);
+            // Enter/leave events will be recreated by sub-document's event driver
+            // based move events
+            DomEventData::PointerEnter(_) => None,
+            DomEventData::PointerLeave(_) => None,
+            DomEventData::PointerOver(_) => None,
+            DomEventData::PointerOut(_) => None,
+
+            // Mouse events will be recreated by sub-document's event driver
+            // based pointer events
+            DomEventData::MouseMove(_) => None,
+            DomEventData::MouseDown(_) => None,
+            DomEventData::MouseUp(_) => None,
+            DomEventData::MouseEnter(_) => None,
+            DomEventData::MouseLeave(_) => None,
+            DomEventData::MouseOver(_) => None,
+            DomEventData::MouseOut(_) => None,
+
+            DomEventData::KeyDown(data) => Some(UiEvent::KeyDown(data)),
+            DomEventData::KeyUp(data) => Some(UiEvent::KeyUp(data)),
+            DomEventData::Ime(data) => Some(UiEvent::Ime(data)),
+
+            DomEventData::KeyPress(_) => None,
+            DomEventData::Click(_) => None,
+            DomEventData::ContextMenu(_) => None,
+            DomEventData::DoubleClick(_) => None,
+            DomEventData::Input(_) => None,
+            DomEventData::Wheel(data) => Some(UiEvent::Wheel(data)),
+            DomEventData::Scroll(_) => None,
+            DomEventData::Focus(_) => None,
+            DomEventData::Blur(_) => None,
+            DomEventData::FocusIn(_) => None,
+            DomEventData::FocusOut(_) => None,
+            DomEventData::Submit(_) => None,
+        };
 
         if let Some(ui_event) = ui_event {
             sub_doc.handle_ui_event(ui_event);
-        }
-
-        if set_focus {
-            generate_focus_events(
-                doc,
-                &mut |doc| {
-                    doc.set_focus_to(target_node_id);
-                },
-                &mut dispatch_event,
-            );
-        }
-
-        return;
-    }
-
-    // Handle event forwarding for custom widget
-    #[cfg(feature = "custom-widget")]
-    if let Some(widget_data) = node
-        .element_data_mut()
-        .and_then(|el| el.custom_widget_data_mut())
-    {
-        let set_focus = matches!(
-            &event.data,
-            DomEventData::PointerDown(_) | DomEventData::PointerUp(_)
-        );
-        let viewport_scroll = Point { x: 0.0, y: 0.0 };
-        let ui_event = map_dom_event_to_ui_event(event, pos, viewport_scroll);
-
-        if let Some(ui_event) = ui_event {
-            widget_data.widget.handle_event(&ui_event);
         }
 
         if set_focus {
@@ -181,12 +141,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
             handle_click(doc, target_node_id, event, &mut dispatch_event);
         }
         DomEventData::KeyDown(event) => {
-            handle_key_or_input_event(
-                doc,
-                target_node_id,
-                KeyboardOrTextInputEvent::KeyPress(event.clone()),
-                dispatch_event,
-            );
+            handle_keypress(doc, target_node_id, event.clone(), dispatch_event);
         }
         DomEventData::KeyPress(_) => {
             // Do nothing (no default action)
@@ -194,22 +149,16 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
         DomEventData::KeyUp(_) => {
             // Do nothing (no default action)
         }
-        DomEventData::AppleStandardKeybinding(event) => {
-            handle_key_or_input_event(
-                doc,
-                target_node_id,
-                KeyboardOrTextInputEvent::AppleStandardKeyBinding(event.clone()),
-                dispatch_event,
-            );
-        }
         DomEventData::Ime(event) => {
             handle_ime_event(doc, event.clone(), dispatch_event);
         }
         DomEventData::Input(_) => {
             // Do nothing (no default action)
         }
-        DomEventData::ContextMenu(_) => {
-            // TODO: Open context menu
+        DomEventData::ContextMenu(event) => {
+            // Default action: show the platform-native context menu at screen coordinates
+            doc.shell_provider
+                .show_context_menu(event.screen_x() as f64, event.screen_y() as f64);
         }
         DomEventData::DoubleClick(_) => {
             // Do nothing (no default action)
@@ -255,6 +204,13 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
         }
         DomEventData::FocusOut(_) => {
             // Do nothing (no default action)
+        }
+        DomEventData::Submit(data) => {
+            // Default action: submit the form. This runs AFTER scripts have had
+            // a chance to process the event and potentially call preventDefault().
+            // If the event was cancelled, this code never executes.
+            // event.target is the form node ID (set when the Submit event was dispatched).
+            doc.submit_form(event.target, data.submitter_id);
         }
     }
 }
