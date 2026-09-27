@@ -1,0 +1,17 @@
+bliss-anyrender-vello
+
+Forked from the `anyrender_vello` crate (Vello backend for anyrender).
+
+  Upstream:   https://github.com/DioxusLabs/anyrender
+  Copyright:  Dioxus Labs and the anyrender contributors
+  License:    MIT OR Apache-2.0
+
+Modifications made for Bliss:
+  - src/window_renderer.rs: SceneOverlay/set_scene_effects hooks, used by
+    Bliss's mustang GPU post-processor (blur/transform CSS effects). This
+    is the majority of the divergence from upstream.
+  - src/scene.rs, src/lib.rs, src/image_renderer.rs, src/custom_paint_source.rs:
+    smaller supporting changes for the above.
+
+See LICENSE-MIT / LICENSE-APACHE at the repository root for the full
+license text (this crate inherits the workspace's dual license).
