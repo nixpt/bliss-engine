@@ -15,13 +15,13 @@ exclude = ["sites"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/nixpt/bliss-engine"
 repository = "https://github.com/nixpt/bliss-engine"
 categories = ["gui"]
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # BLISS-HOME-1 (s506): content-synced from nixpt/arniko @ 8bc8541
