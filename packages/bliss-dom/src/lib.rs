@@ -4,7 +4,7 @@
 //! Most users will want to use a wrapper:
 //!
 //! - [`HtmlDocument`](https://docs.rs/bliss-html/latest/bliss_html/struct.HtmlDocument.html) from [bliss-html](https://docs.rs/bliss-html) — parse HTML into a `BaseDocument`
-//! - [`DioxusDocument`](https://docs.rs/dioxus-native/latest/dioxus_native/struct.DioxusDocument.html) from [dioxus-native](https://docs.rs/dioxus-native) — dynamic rendering with Dioxus
+//! - a host-specific document (e.g. arniko's) that drives `BaseDocument` mutations directly
 //!
 //! This crate provides: DOM tree construction and mutation, CSS parsing and style resolution,
 //! layout computation (via taffy), text layout (via parley), event handling, form submission,

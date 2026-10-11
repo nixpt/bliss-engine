@@ -42,9 +42,11 @@ cargo test -p bliss-traits
 
 ## 🌉 Upstream Policy
 
-While Bliss is a hard fork for architectural reasons, we believe in supporting the broader Rust UI ecosystem.
-- **Bug Fixes**: Generic logic fixes for Taffy layout or Stylo resolution should be upstreamed to Dioxus Labs if possible.
-- **Divergence**: Architectural changes regarding the `ScriptEngine` trait, Capability safety, and Simulation hooks are considered core Bliss features and will remain here.
+Bliss is an independent hard fork and does not track upstream Blitz.
+- **Fixes land here.** Fix bugs in this repo. Porting a fix *from* upstream Blitz is welcome; cite the upstream commit in the message and keep its notices.
+- **No upstream submissions from this project.** Do not open issues or PRs against DioxusLabs, Servo or Linebender repos on behalf of Bliss, and never from an agent. If a fix belongs upstream, a human maintainer decides, self-reviews and files it.
+- **Dependencies.** Taffy, Stylo, Parley, Vello and anyrender are crates.io dependencies; bump them on purpose, one at a time, with a changelog note.
+- **Divergence.** The `ScriptEngine` trait, capability safety and simulation hooks are core Bliss features.
 
 ---
 *Exosphere: Architecting the Post-Human Interface.*

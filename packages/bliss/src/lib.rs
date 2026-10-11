@@ -2,13 +2,12 @@
 
 //! Bliss is a modular, embeddable web engine with a native Rust API.
 //!
-//! It powers the [`dioxus-native`] UI framework.
+//! It is the rendering engine of the Exosphere stack (arniko, surfer-browser).
 //!
 //! This crate exists to collect the most important functionality for users together in one place.
 //! It does not bring any unique functionality, but rather, it re-exports the relevant crates as modules.
 //! The exported crate corresponding to each module is also available in a stand-alone manner, i.e. [`bliss-dom`] as [`bliss::dom`](crate::dom).
 //!
-//! [`dioxus-native`]: https://docs.rs/dioxus-native
 //! [`bliss-dom`]: https://docs.rs/bliss-dom
 
 use std::sync::Arc;

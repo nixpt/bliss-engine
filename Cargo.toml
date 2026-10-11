@@ -74,7 +74,7 @@ atomic_refcell = "0.1.13"
 app_units = "0.7.5"
 smallvec = "1"
 
-# DioxusLabs Taffy
+# Layout (taffy, crates.io)
 taffy = { version = "0.11", default-features = false, features = [
     "std", "flexbox", "grid", "block_layout", "content_size", "calc", "detailed_layout_info",
 ] }

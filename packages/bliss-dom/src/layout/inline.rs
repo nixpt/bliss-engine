@@ -419,7 +419,7 @@ impl BaseDocument {
         //     // Height SHOULD be ignored if RequestedAxis is Horizontal, but currently that doesn't
         //     // always seem to be the case. So we perform layout to obtain a height every time. We
         //     // perform layout on a clone of the Layout to avoid clobbering the actual layout which
-        //     // was causing https://github.com/DioxusLabs/bliss/pull/247#issuecomment-3235111617
+        //     // was causing https://github.com/DioxusLabs/blitz/pull/247#issuecomment-3235111617 (pre-fork upstream)
         //     //
         //     // Doing this does seem to be as slow as one might expect, and if it enables correct
         //     // incremental layout then that is overall a big performance win.
