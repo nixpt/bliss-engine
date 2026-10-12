@@ -238,9 +238,11 @@ impl DomController for BaseDocument {
             .and_then(|node| node.element_data())
             .ok_or(DomControlError::NodeNotFound(node_id))?;
 
-        let parser = self.html_parser_provider.clone();
-        let mut mutr = self.mutate();
-        parser.parse_inner_html(&mut mutr, node_id, html);
+        // Replace, don't append: `innerHTML` assignment drops the existing
+        // children first. (Parsing straight into the mutator used to append,
+        // so repeated patches of the same element accumulated copies.)
+        // `DocumentMutator::set_inner_html` clears and then parses.
+        self.mutate().set_inner_html(node_id, html);
         Ok(())
     }
 
@@ -496,6 +498,30 @@ mod tests {
 
         let result = doc.query_selector(".nonexistent").unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_dom_controller_set_inner_html_replaces_children() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+
+        let div = doc.create_node(NodeData::Element(ElementData::new(
+            qual_name!("div"),
+            vec![],
+        )));
+        doc.root_node_mut().children.push(div);
+        doc.get_node_mut(div).unwrap().parent = Some(0);
+
+        let old = doc.create_text_node("old");
+        doc.get_node_mut(div).unwrap().children.push(old);
+        doc.get_node_mut(old).unwrap().parent = Some(div);
+
+        // Regression: the DomController impl parsed into the element without
+        // removing existing children, so each call appended.
+        DomController::set_inner_html(&mut doc, div, "").unwrap();
+        assert!(
+            doc.get_node(div).unwrap().children.is_empty(),
+            "set_inner_html must drop existing children"
+        );
     }
 
     #[test]
