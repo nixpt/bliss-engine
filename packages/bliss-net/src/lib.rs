@@ -26,10 +26,22 @@ type RequestBuilder = reqwest::RequestBuilder;
 #[cfg(feature = "cache")]
 fn get_cache_path() -> std::path::PathBuf {
     use directories::ProjectDirs;
-    let path = ProjectDirs::from("com", "DioxusLabs", "Bliss")
+    let path = ProjectDirs::from("com", "Exosphere", "Bliss")
         .expect("Failed to find cache directory")
         .cache_dir()
         .to_owned();
+    // One-time move of a cache created under the pre-fork "DioxusLabs" vendor dir.
+    if !path.exists() {
+        if let Some(legacy) = ProjectDirs::from("com", "DioxusLabs", "Bliss") {
+            let legacy = legacy.cache_dir();
+            if legacy.exists() {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::rename(legacy, &path);
+            }
+        }
+    }
     println!("Using cache dir {}", path.display());
     path
 }

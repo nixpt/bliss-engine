@@ -26,7 +26,7 @@ bliss-dom = { path = "../bliss-dom", version = "0.3.0" }
 style = { version = "0.11.0", package = "stylo" }
 euclid = "0.22"
 
-# DioxusLabs dependencies
+# Layout (crates.io)
 taffy = { workspace = true }
 
 # Linebender + WGPU dependencies

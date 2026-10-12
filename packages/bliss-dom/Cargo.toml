@@ -58,7 +58,7 @@ atomic_refcell = "0.1.13"
 markup5ever = "0.37.0"
 smallvec = "1"
 
-# DioxusLabs dependencies
+# Layout (crates.io)
 taffy = { workspace = true }
 
 # Linebender/Fontations dependencies

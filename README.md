@@ -90,10 +90,11 @@ Bliss is comprised of granular, modular crates that can be combined or replaced:
 
 ## 🌉 Relationship to Upstream
 
-We maintain a "Hard Fork" for architectural divergence while tracking generic improvements:
-- We track upstream **Stylo** and **Taffy** updates.
-- We contribute generic layout/CSS bug fixes back to the Dioxus Labs ecosystem.
-- Architectural changes for Agent-OS integration remain exclusive to Bliss.
+Bliss is an independent hard fork of [Blitz](https://github.com/DioxusLabs/blitz) (forked at upstream `b88144ed`, 2026-02-05; last upstream intake: alpha.4, 2026-05-18). It no longer tracks Blitz:
+- All crates are renamed `bliss-*` and published from this repo; nothing depends on `blitz-*` or `dioxus-*`.
+- Third-party engines (**Stylo**, **Taffy**, **Parley**, **Vello**, **anyrender**) are ordinary crates.io dependencies, updated deliberately.
+- Upstream Blitz is reviewed periodically for fixes worth porting by hand. We do not open issues or PRs upstream from this project; any upstream report is made by a human maintainer, self-reviewed.
+- Original copyright and licence notices for Blitz and anyrender are kept in [`NOTICE`](NOTICE) and each crate's licence files.
 
 ## 📜 License
 
