@@ -2,7 +2,7 @@
 name = "arniko-bliss"
 version.workspace = true
 description = "High-level APIs for rendering HTML with Bliss"
-documentation = "https://docs.rs/bliss"
+documentation = "https://docs.rs/arniko-bliss"
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
