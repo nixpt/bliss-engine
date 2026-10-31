@@ -25,8 +25,6 @@ mod event;
 mod net;
 mod window;
 
-#[cfg(feature = "exoshell")]
-pub mod exoshell;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;

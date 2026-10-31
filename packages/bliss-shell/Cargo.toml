@@ -18,8 +18,6 @@ file_dialog = ["dep:rfd"]
 accessibility = ["dep:accesskit", "dep:accesskit_xplat", "bliss-dom/accessibility"]
 # Enables a data-uri-only NetProvider. Only needed if you aren't using the regular NetProvider
 data-uri = ["dep:data-url"]
-# ExoShell integration — monorepo-only; dep removed for crates.io publish (exo-shell-client not on registry)
-exoshell = []
 
 [dependencies]
 # Bliss dependencies

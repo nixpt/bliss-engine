@@ -39,10 +39,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install apt deps (GTK/xdo — winit/rfd/arboard need them)
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
-          version: 1.0
+        # Plain apt-get, not awalsh128/cache-apt-pkgs-action: its restored cache left
+        # fontconfig's pkg-config file missing, so yeslogic-fontconfig-sys's build
+        # script failed and every job was red from 2026-10-12.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
 
       - name: cargo check
         run: cargo check --workspace --all-targets
@@ -66,10 +66,10 @@ jobs:
           toolchain: 1.89.0
       - uses: Swatinem/rust-cache@v2
       - name: Install apt deps
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
-          version: 1.0
+        # Plain apt-get, not awalsh128/cache-apt-pkgs-action: its restored cache left
+        # fontconfig's pkg-config file missing, so yeslogic-fontconfig-sys's build
+        # script failed and every job was red from 2026-10-12.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets
 
@@ -81,8 +81,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install apt deps
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
-          version: 1.0
+        # Plain apt-get, not awalsh128/cache-apt-pkgs-action: its restored cache left
+        # fontconfig's pkg-config file missing, so yeslogic-fontconfig-sys's build
+        # script failed and every job was red from 2026-10-12.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libxdo-dev libasound2-dev libudev-dev libssl-dev libfontconfig1-dev
       - run: cargo doc --workspace --no-deps
+      - name: cargo doc as docs.rs builds it (per crate, docs.rs features)
+        # docs.rs builds each crate alone with its [package.metadata.docs.rs]
+        # features (all-features for most of ours). A feature that can't compile
+        # (bliss-shell's `exoshell`, whose dependency is not on crates.io) only
+        # shows up this way.
+        run: |
+          set -o pipefail
+          cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.publish != []) | [.name, ((.metadata.docs.rs."all-features") // false), (((.metadata.docs.rs.features) // []) | join(","))] | @tsv' \
+            | while IFS=$'\t' read -r name all features; do
+                args=(-p "$name" --no-deps)
+                if [ "$all" = true ]; then args+=(--all-features); elif [ -n "$features" ]; then args+=(--features "$features"); fi
+                echo "::group::cargo doc ${args[*]}"
+                cargo doc "${args[@]}"
+                echo "::endgroup::"
+              done
