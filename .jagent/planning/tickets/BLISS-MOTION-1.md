@@ -16,11 +16,20 @@ spring timing function** and **no velocity-preserving retarget**.
 
 ## Done when
 
-- [ ] A **spring** usable as a CSS `linear()`-equivalent timing for `transition-*` (and available
-      programmatically), with closed-form sampling across under/critical/over-damped regimes.
+- [x] A **spring** with closed-form sampling across under/critical/over-damped regimes —
+      `bliss_traits::motion::Spring` (`new` / `sample` / `settling_duration`), in the shared leaf
+      crate every `bliss-*` crate, `mustang` and `arniko` already depend on. *(Programmatic
+      primitive landed; the CSS-timing and retarget API over it are the remaining items.)*
+- [ ] Use the spring as a CSS timing for `transition-*` (or a programmatic animation API on the
+      document that writes a property and re-resolves).
 - [ ] **Retargeting keeps position and velocity** (sample-and-restart from the current
       `(value, velocity)`), so a mid-flight target change has no discontinuity.
 - [ ] A reduced-motion policy and a time scale hook for the animation clock.
+
+## Note
+
+`bliss_traits::motion::Spring` supersedes a per-consumer copy (arniko already has an equivalent
+`crates/arniko/src/motion`; it can re-export from here to dedupe).
 
 ## Notes
 
