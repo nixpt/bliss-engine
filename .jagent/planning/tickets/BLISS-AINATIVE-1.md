@@ -48,7 +48,11 @@ Everything needed already exists as primitives; the gap is a channel and a few c
 - [ ] Embed the channel behind a **running window**. A `BaseDocument` is not `Send`, so the
       windowed host (bliss-shell) must run the server on a thread and marshal each command to the
       UI thread (the winit proxy / `BlissShellEvent`), returning the response to the socket.
-- [ ] A stylesheet / CSS **hot-reload** path (re-inject via the stylesheet API and re-resolve).
+- [x] A **CSS hot-reload** path — `BaseDocument::hot_reload_style(css)`: replace the first `<style>`
+      element's text, rebuild its sheet via `upsert_stylesheet_for_node` (which marks a full
+      restyle), and re-resolve. Tested for the **mechanism** (the `<style>` text is replaced, the
+      sheet is rebuilt, `resolve` runs). A computed-style assertion needs a fully-parsed document;
+      and an HTML (markup) reload needs an `HtmlParserProvider` — both are follow-ups.
 - [x] Never enabled by default: the `control` feature is off; the server binds `127.0.0.1` and
       requires a token. *(Routing untrusted content through `PolicyDomController` is still to do.)*
 

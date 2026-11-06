@@ -84,6 +84,7 @@ mod form;
 /// Allows pluggable parsing of `innerHTML` into the DOM tree.
 /// The `DummyHtmlParserProvider` is a no-op placeholder; real parsing
 /// comes from [bliss-html](https://docs.rs/bliss-html).
+mod hot;
 mod html;
 /// Layout tree construction, computation, and damage tracking.
 ///
