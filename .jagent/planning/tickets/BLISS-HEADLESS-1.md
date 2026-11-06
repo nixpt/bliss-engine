@@ -25,9 +25,13 @@ markup/CSS blind therefore cannot see what it built or check it.
       The fling (pointer pan → pointer up → `resolve`) now reads the document clock instead of
       `SystemTime`, so scrolling reproduces frame-for-frame when the clock is set. (`resolve(time)`
       already took a time for styles; the wall-clock leak was the fling.)
-- [ ] **Synthetic input** (click / type / key / scroll / fling) so a scripted scenario renders
-      deterministically.
-- [ ] A smoke script/example that drives a page headlessly and diffs two frames.
+- [x] **Synthetic input** — `EventDriver::{synthesize_pointer_move, synthesize_pointer_down,
+      synthesize_pointer_up, synthesize_click, synthesize_wheel, synthesize_key_down,
+      synthesize_key_up}`, built as the same `UiEvent`s the shell feeds and run through the
+      handler chain, sink and default actions. Tests in `src/tests/events.rs` (hover, click, wheel).
+- [x] A headless smoke — `headless_input_then_dump`: a synthetic click runs through to a handler
+      that mutates the DOM, and `document_tree_json` reflects it. (Delivered as a test; bliss-dom
+      has no HTML parser, so an HTML-driven example belongs in a crate that does.)
 
 ## Note
 
