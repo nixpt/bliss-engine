@@ -19,6 +19,7 @@ use crate::{
     EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, TextNodeData,
 };
 use bliss_traits::devtools::DevtoolSettings;
+use bliss_traits::motion::MotionSettings;
 use bliss_traits::events::{
     BlissScrollEvent, DomEvent, DomEventData, EventSink, HitResult, UiEvent,
 };
@@ -273,6 +274,8 @@ pub struct BaseDocument {
     pub(crate) scroll_snap: HashMap<usize, SnapPoints>,
     /// Programmatic spring animations (see [`BaseDocument::animate`]).
     pub(crate) spring_animations: HashMap<(usize, String), Animated>,
+    /// Motion policy: time scale + reduced motion (see [`BaseDocument::set_time_scale`]).
+    pub(crate) motion: MotionSettings,
 
     /// Text selection state (for non-input text)
     pub(crate) text_selection: TextSelection,
@@ -488,6 +491,7 @@ impl BaseDocument {
             clock_ms: None,
             scroll_snap: HashMap::new(),
             spring_animations: HashMap::new(),
+            motion: MotionSettings::default(),
             text_selection: TextSelection::default(),
         };
 

@@ -27,7 +27,10 @@ spring timing function** and **no velocity-preserving retarget**.
       alternative is not viable upstream — see the design note.)*
 - [x] **Retargeting keeps position and velocity** — a later `animate` sample-and-restarts from the
       current `(value, velocity)`; test: `retarget_keeps_position`.
-- [ ] A reduced-motion policy and a time scale hook for the animation clock.
+- [x] A **reduced-motion policy and a time scale hook** — `MotionSettings` (shared, in
+      `bliss_traits::motion`) on the document: `set_reduced_motion(true)` snaps spatial animation;
+      `set_time_scale(t)` multiplies the animation clock (`0.0` pauses, `2.0` doubles). Tests:
+      `reduced_motion_snaps`, `time_scale_pauses_and_resumes`.
 
 ## Note
 

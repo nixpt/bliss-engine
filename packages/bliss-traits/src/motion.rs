@@ -23,6 +23,25 @@ pub struct Spring {
 /// Upper bound on any reported settling time, in seconds.
 const MAX_SETTLE: f32 = 120.0;
 
+/// Motion policy for a document or app (BLISS-MOTION-1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MotionSettings {
+    /// Clock multiplier for animations: `1.0` normal, `0.0` paused, `2.0` double
+    /// speed.
+    pub time_scale: f32,
+    /// When set, spatial animation snaps instead of travelling (accessibility).
+    pub reduced_motion: bool,
+}
+
+impl Default for MotionSettings {
+    fn default() -> Self {
+        MotionSettings {
+            time_scale: 1.0,
+            reduced_motion: false,
+        }
+    }
+}
+
 impl Spring {
     /// `Spring(duration:bounce:)`. Panics on a non-positive duration or a bounce
     /// outside `(-1, 1)`.
