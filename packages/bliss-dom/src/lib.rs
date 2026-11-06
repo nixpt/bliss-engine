@@ -45,10 +45,12 @@ pub mod node;
 /// Controls viewport, base URL, user-agent stylesheets, font context, and provider
 /// implementations for networking, navigation, shell, and HTML parsing.
 mod config;
-/// Debug and inspection utilities: `print_taffy_tree`, `debug_log_node`.
+/// Debug and inspection utilities: `print_taffy_tree`, `debug_log_node`,
+/// `document_tree_json`.
 ///
 /// Methods on [`BaseDocument`] for dumping layout trees, inline content,
-/// and node metadata to stdout for debugging purposes.
+/// and node metadata to stdout for debugging, and `document_tree_json` for a
+/// machine-readable JSON dump of the resolved tree (agent tooling).
 mod debug;
 /// Policy-based DOM controller: [`PolicyDomController`].
 ///

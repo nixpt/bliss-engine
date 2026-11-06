@@ -16,9 +16,11 @@ markup/CSS blind therefore cannot see what it built or check it.
 
 ## Done when
 
-- [ ] A **JSON serialization of the resolved DOM + layout tree** (tag, attributes, text, rect,
-      children). Reference serializer: arniko `crates/arniko/src/inspect.rs` (`document_tree`),
-      built on `bliss_dom::BaseDocument`.
+- [x] A **JSON serialization of the resolved DOM + layout tree** — `BaseDocument::document_tree_json()`
+      in `packages/bliss-dom/src/debug.rs` (compact, dependency-free; per node: `tag` / `text` /
+      `comment` / `shadow_root`, optional `attrs` and `anonymous`, `rect` `[x,y,w,h]`, `children`).
+      Block-layout rects only — inline content reports zero. Reference: arniko
+      `crates/arniko/src/inspect.rs` (`document_tree`).
 - [ ] A **deterministic virtual clock**: a caller-supplied `now` so `resolve(time)` reproduces
       identical frames for identical input.
 - [ ] **Synthetic input** (click / type / key / scroll / fling) so a scripted scenario renders
