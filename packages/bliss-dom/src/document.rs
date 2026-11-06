@@ -8,6 +8,7 @@ use crate::net::{
 };
 use crate::node::{ImageData, NodeFlags, RasterImageData, SpecialElementData, Status, TextBrush};
 use crate::selection::TextSelection;
+use crate::scroll::{SnapPoints, nearest_snap};
 use crate::stylo_to_cursor_icon::stylo_to_cursor_icon;
 use crate::traversal::TreeTraverser;
 use crate::url::DocumentUrl;
@@ -266,6 +267,9 @@ pub struct BaseDocument {
     /// clock. Set it (via [`BaseDocument::set_clock_ms`]) for a deterministic
     /// timeline — `resolve` and fling scrolling then reproduce exactly.
     pub(crate) clock_ms: Option<f64>,
+    /// Per-node scroll-snap offsets (see [`BaseDocument::set_scroll_snap`]),
+    /// applied when a pan/fling on the node settles.
+    pub(crate) scroll_snap: HashMap<usize, SnapPoints>,
 
     /// Text selection state (for non-input text)
     pub(crate) text_selection: TextSelection,
@@ -479,6 +483,7 @@ impl BaseDocument {
             drag_mode: DragMode::None,
             scroll_animation: ScrollAnimationState::None,
             clock_ms: None,
+            scroll_snap: HashMap::new(),
             text_selection: TextSelection::default(),
         };
 
@@ -1810,6 +1815,50 @@ impl BaseDocument {
             self.scroll_node_by_has_changed(anchor_node_id, scroll_x, scroll_y, dispatch_event)
         } else {
             self.scroll_viewport_by_has_changed(scroll_x, scroll_y)
+        }
+    }
+
+    /// Declare scroll-snap offsets for a scroll container (`node`), per axis, in
+    /// scroll-offset space. When a pan/fling on `node` settles, its offset snaps
+    /// to the nearest point on each axis. See `BLISS-SCROLL-1`.
+    pub fn set_scroll_snap(&mut self, node: usize, points: SnapPoints) {
+        self.scroll_snap.insert(node, points);
+    }
+
+    /// Remove a container's scroll-snap offsets.
+    pub fn clear_scroll_snap(&mut self, node: usize) {
+        self.scroll_snap.remove(&node);
+    }
+
+    /// The offset `node` would snap to (per axis), or `None` when it declares no
+    /// snap points. Read-only; [`snap_scroll_node`](BaseDocument::snap_scroll_node)
+    /// applies it.
+    pub fn scroll_snap_target(&self, node: usize) -> Option<(f64, f64)> {
+        let points = self.scroll_snap.get(&node)?;
+        let current = self.nodes.get(node)?;
+        let x =
+            nearest_snap(current.scroll_offset.x, &points.x).unwrap_or(current.scroll_offset.x);
+        let y =
+            nearest_snap(current.scroll_offset.y, &points.y).unwrap_or(current.scroll_offset.y);
+        Some((x, y))
+    }
+
+    /// Snap a settled scroll container to its nearest declared offsets.
+    pub(crate) fn snap_scroll_node(&mut self, node: usize) {
+        let (cur_x, cur_y) = match self.nodes.get(node) {
+            Some(n) => (n.scroll_offset.x, n.scroll_offset.y),
+            None => return,
+        };
+        let Some((target_x, target_y)) = self.scroll_snap_target(node) else {
+            return;
+        };
+        // `scroll_by` subtracts its delta, so to land on the target offset we
+        // pass the negated difference.
+        let dx = cur_x - target_x;
+        let dy = cur_y - target_y;
+        if dx != 0.0 || dy != 0.0 {
+            self.scroll_by(Some(node), dx, dy, &mut |_| {});
+            self.shell_provider.request_redraw();
         }
     }
 

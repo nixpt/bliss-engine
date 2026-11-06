@@ -18,7 +18,10 @@ overscroll, virtualized rows, or cached-subtree rasterization.
 
 - [ ] **Scroll edge fade** — fade a viewport's top/bottom (and left/right) only while content is
       hidden under them.
-- [ ] **Scroll-snap**.
+- [x] **Scroll-snap** (programmatic) — `SnapPoints` + `nearest_snap` in `src/scroll.rs`, and
+      `BaseDocument::set_scroll_snap` / `scroll_snap_target`, applied when a pan/fling settles
+      (`resolve_scroll_animation`). Remaining: wire CSS `scroll-snap-type` / `scroll-snap-align`
+      to these points (needs per-child layout geometry).
 - [ ] Sticky headers carry a stuck-shadow once pinned.
 - [ ] (larger, later) **Virtualized rows** and **cached subtrees** — realize/paint only what is on
       screen; rasterize a settled subtree and composite it.

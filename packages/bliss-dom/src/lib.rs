@@ -126,6 +126,7 @@ mod script;
 /// Tracks anchor/focus endpoints across inline roots, including anonymous blocks
 /// whose IDs may change across layout reconstructions. Used by event handling
 /// to implement click-to-select and drag-to-extend.
+mod scroll;
 mod selection;
 /// Integration with Servo's style engine (stylo).
 ///
@@ -183,6 +184,7 @@ pub use markup5ever::{
 };
 pub use mutator::DocumentMutator;
 pub use mutation::Mutation;
+pub use scroll::{SnapPoints, nearest_snap};
 pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
 pub use script::{
