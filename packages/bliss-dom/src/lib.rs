@@ -32,6 +32,7 @@ const NON_INCREMENTAL: bool = !INCREMENTAL;
 ///
 /// `BaseDocument` manages the node tree, style system, layout state, event handlers,
 /// and all cross-cutting concerns. Most of the high-level APIs live as methods on this struct.
+mod animate;
 mod document;
 
 /// DOM node types: [`Node`], [`NodeData`], [`ElementData`], [`Attribute`], [`TextNodeData`].

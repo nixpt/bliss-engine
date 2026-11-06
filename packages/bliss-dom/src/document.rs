@@ -1,3 +1,4 @@
+use crate::animate::Animated;
 use crate::events::{DragMode, ScrollAnimationState, handle_dom_event};
 use crate::font_metrics::BlissFontMetricsProvider;
 use crate::layout::construct::ConstructionTask;
@@ -270,6 +271,8 @@ pub struct BaseDocument {
     /// Per-node scroll-snap offsets (see [`BaseDocument::set_scroll_snap`]),
     /// applied when a pan/fling on the node settles.
     pub(crate) scroll_snap: HashMap<usize, SnapPoints>,
+    /// Programmatic spring animations (see [`BaseDocument::animate`]).
+    pub(crate) spring_animations: HashMap<(usize, String), Animated>,
 
     /// Text selection state (for non-input text)
     pub(crate) text_selection: TextSelection,
@@ -484,6 +487,7 @@ impl BaseDocument {
             scroll_animation: ScrollAnimationState::None,
             clock_ms: None,
             scroll_snap: HashMap::new(),
+            spring_animations: HashMap::new(),
             text_selection: TextSelection::default(),
         };
 
@@ -1602,6 +1606,7 @@ impl BaseDocument {
             | self.has_active_animations
             | self.subdoc_is_animating
             | (self.scroll_animation != ScrollAnimationState::None)
+            | self.programmatic_animating()
     }
 
     /// Update the device and reset the stylist to process the new size

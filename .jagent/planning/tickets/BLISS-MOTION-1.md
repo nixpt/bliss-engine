@@ -20,10 +20,13 @@ spring timing function** and **no velocity-preserving retarget**.
       `bliss_traits::motion::Spring` (`new` / `sample` / `settling_duration`), in the shared leaf
       crate every `bliss-*` crate, `mustang` and `arniko` already depend on. *(Programmatic
       primitive landed; the CSS-timing and retarget API over it are the remaining items.)*
-- [ ] Use the spring as a CSS timing for `transition-*` (or a programmatic animation API on the
-      document that writes a property and re-resolves).
-- [ ] **Retargeting keeps position and velocity** (sample-and-restart from the current
-      `(value, velocity)`), so a mid-flight target change has no discontinuity.
+- [x] A **programmatic animation API on the document** — `BaseDocument::animate(node, property,
+      target, spring)` + `tick_animations()` (samples the springs, writes changed values) +
+      `animation_value` / `cancel_animation`; `is_animating` reports running springs. Independent
+      of stylo; composes with the virtual clock. *(The CSS `transition-*` spring-timing
+      alternative is not viable upstream — see the design note.)*
+- [x] **Retargeting keeps position and velocity** — a later `animate` sample-and-restarts from the
+      current `(value, velocity)`; test: `retarget_keeps_position`.
 - [ ] A reduced-motion policy and a time scale hook for the animation clock.
 
 ## Note
