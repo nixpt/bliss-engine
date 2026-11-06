@@ -1,9 +1,6 @@
 //! Resolve style and layout
 
-use std::{
-    cell::RefCell,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::cell::RefCell;
 
 use debug_timer::debug_timer;
 use parley::LayoutContext;
@@ -135,13 +132,9 @@ impl BaseDocument {
     }
 
     pub fn resolve_scroll_animation(&mut self) {
+        let time_ms = self.now_ms();
         match &mut self.scroll_animation {
             ScrollAnimationState::Fling(fling_state) => {
-                let time_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64 as f64;
-
                 let time_diff_ms = time_ms - fling_state.last_seen_time;
 
                 // 0.95 @ 60fps normalized to actual frame times

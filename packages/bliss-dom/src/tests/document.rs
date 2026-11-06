@@ -7,6 +7,20 @@ fn setup_doc() -> BaseDocument {
     BaseDocument::new(config)
 }
 
+#[test]
+fn test_virtual_clock() {
+    let mut doc = setup_doc();
+    // Default: the system clock (a positive epoch time in ms).
+    assert!(doc.now_ms() > 0.0);
+    // Virtual: exact and reproducible.
+    doc.set_clock_ms(Some(1000.0));
+    assert_eq!(doc.now_ms(), 1000.0);
+    doc.set_clock_ms(Some(1250.5));
+    assert_eq!(doc.now_ms(), 1250.5);
+    doc.set_clock_ms(None);
+    assert!(doc.now_ms() > 0.0);
+}
+
 // ── Node Creation and Removal Round-Trips ──────────────────────────────────────
 
 #[test]

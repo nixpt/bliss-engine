@@ -21,11 +21,18 @@ markup/CSS blind therefore cannot see what it built or check it.
       `comment` / `shadow_root`, optional `attrs` and `anonymous`, `rect` `[x,y,w,h]`, `children`).
       Block-layout rects only — inline content reports zero. Reference: arniko
       `crates/arniko/src/inspect.rs` (`document_tree`).
-- [ ] A **deterministic virtual clock**: a caller-supplied `now` so `resolve(time)` reproduces
-      identical frames for identical input.
+- [x] A **deterministic virtual clock** — `BaseDocument::set_clock_ms(Option<f64>)` / `now_ms()`.
+      The fling (pointer pan → pointer up → `resolve`) now reads the document clock instead of
+      `SystemTime`, so scrolling reproduces frame-for-frame when the clock is set. (`resolve(time)`
+      already took a time for styles; the wall-clock leak was the fling.)
 - [ ] **Synthetic input** (click / type / key / scroll / fling) so a scripted scenario renders
       deterministically.
 - [ ] A smoke script/example that drives a page headlessly and diffs two frames.
+
+## Note
+
+- Double-click detection still uses `Instant` (`last_mousedown_time`), outside the virtual
+  clock; folding it in is a follow-up.
 
 ## Notes
 

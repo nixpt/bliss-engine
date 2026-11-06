@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 use std::task::Context as TaskContext;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use style::Atom;
 use style::animation::DocumentAnimationSet;
 use style::attr::{AttrIdentifier, AttrValue};
@@ -262,6 +262,10 @@ pub struct BaseDocument {
     pub(crate) drag_mode: DragMode,
     /// Whether and what kind of scroll animation is currently in progress
     pub(crate) scroll_animation: ScrollAnimationState,
+    /// Animation/input clock in milliseconds, or `None` to read the system
+    /// clock. Set it (via [`BaseDocument::set_clock_ms`]) for a deterministic
+    /// timeline — `resolve` and fling scrolling then reproduce exactly.
+    pub(crate) clock_ms: Option<f64>,
 
     /// Text selection state (for non-input text)
     pub(crate) text_selection: TextSelection,
@@ -474,6 +478,7 @@ impl BaseDocument {
             click_count: 0,
             drag_mode: DragMode::None,
             scroll_animation: ScrollAnimationState::None,
+            clock_ms: None,
             text_selection: TextSelection::default(),
         };
 
@@ -1554,6 +1559,29 @@ impl BaseDocument {
 
     pub fn get_viewport(&self) -> Viewport {
         self.viewport.clone()
+    }
+
+    /// Set the animation/input clock, in milliseconds, or `None` to read the
+    /// system clock.
+    ///
+    /// With a virtual clock set, [`resolve`](BaseDocument::resolve) and fling
+    /// scrolling are deterministic: identical input reproduces identical frames.
+    /// This is the property headless scenarios and tests need (see the
+    /// `BLISS-HEADLESS-1` ticket).
+    pub fn set_clock_ms(&mut self, ms: Option<f64>) {
+        self.clock_ms = ms;
+    }
+
+    /// The current animation/input time in milliseconds: the virtual clock when
+    /// set via [`BaseDocument::set_clock_ms`], otherwise the system clock.
+    pub fn now_ms(&self) -> f64 {
+        match self.clock_ms {
+            Some(ms) => ms,
+            None => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as f64,
+        }
     }
 
     pub fn devtools(&self) -> &DevtoolSettings {
