@@ -39,3 +39,18 @@ spring timing function** and **no velocity-preserving retarget**.
 - arniko's `css::normalize` used to strip `transition`/`animation`/`@keyframes` before the document
   saw them; that is fixed in arniko PR #29, so the engine now receives them and this ticket makes the
   timing worth having.
+
+## Design (using the spring) — programmatic, not stylo
+
+`bliss_traits::motion::Spring` is in place. To *use* it:
+
+- **A · Programmatic document animation (recommended)** — `BaseDocument::animate(node, property,
+  target, spring)` plus `tick_animations(now)`, which the shell calls each frame: sample the spring,
+  write the style property, set `has_active_animations`, re-resolve. Retarget = call `animate` again
+  (sample-and-restart from `(value, velocity)`). No stylo change, composes with the virtual clock,
+  and gives every consumer (surfer, arniko) springs.
+- **B · CSS spring timing** — make `transition-timing-function` accept a spring. That reaches into
+  stylo's `TimingFunction` (upstream) — not viable without patching stylo.
+
+**Recommendation:** A. The engine already resolves + repaints per frame while `has_active_animations`
+is set, so a per-frame `tick_animations` slots in beside the existing fling stepping.
