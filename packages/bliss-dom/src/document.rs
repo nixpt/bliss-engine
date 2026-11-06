@@ -1,3 +1,4 @@
+use crate::animate::Animated;
 use crate::events::{DragMode, ScrollAnimationState, handle_dom_event};
 use crate::font_metrics::BlissFontMetricsProvider;
 use crate::layout::construct::ConstructionTask;
@@ -8,6 +9,7 @@ use crate::net::{
 };
 use crate::node::{ImageData, NodeFlags, RasterImageData, SpecialElementData, Status, TextBrush};
 use crate::selection::TextSelection;
+use crate::scroll::{SnapPoints, nearest_snap};
 use crate::stylo_to_cursor_icon::stylo_to_cursor_icon;
 use crate::traversal::TreeTraverser;
 use crate::url::DocumentUrl;
@@ -17,6 +19,7 @@ use crate::{
     EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, TextNodeData,
 };
 use bliss_traits::devtools::DevtoolSettings;
+use bliss_traits::motion::MotionSettings;
 use bliss_traits::events::{
     BlissScrollEvent, DomEvent, DomEventData, EventSink, HitResult, UiEvent,
 };
@@ -40,7 +43,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 use std::task::Context as TaskContext;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use style::Atom;
 use style::animation::DocumentAnimationSet;
 use style::attr::{AttrIdentifier, AttrValue};
@@ -262,6 +265,17 @@ pub struct BaseDocument {
     pub(crate) drag_mode: DragMode,
     /// Whether and what kind of scroll animation is currently in progress
     pub(crate) scroll_animation: ScrollAnimationState,
+    /// Animation/input clock in milliseconds, or `None` to read the system
+    /// clock. Set it (via [`BaseDocument::set_clock_ms`]) for a deterministic
+    /// timeline — `resolve` and fling scrolling then reproduce exactly.
+    pub(crate) clock_ms: Option<f64>,
+    /// Per-node scroll-snap offsets (see [`BaseDocument::set_scroll_snap`]),
+    /// applied when a pan/fling on the node settles.
+    pub(crate) scroll_snap: HashMap<usize, SnapPoints>,
+    /// Programmatic spring animations (see [`BaseDocument::animate`]).
+    pub(crate) spring_animations: HashMap<(usize, String), Animated>,
+    /// Motion policy: time scale + reduced motion (see [`BaseDocument::set_time_scale`]).
+    pub(crate) motion: MotionSettings,
 
     /// Text selection state (for non-input text)
     pub(crate) text_selection: TextSelection,
@@ -474,6 +488,10 @@ impl BaseDocument {
             click_count: 0,
             drag_mode: DragMode::None,
             scroll_animation: ScrollAnimationState::None,
+            clock_ms: None,
+            scroll_snap: HashMap::new(),
+            spring_animations: HashMap::new(),
+            motion: MotionSettings::default(),
             text_selection: TextSelection::default(),
         };
 
@@ -1556,6 +1574,29 @@ impl BaseDocument {
         self.viewport.clone()
     }
 
+    /// Set the animation/input clock, in milliseconds, or `None` to read the
+    /// system clock.
+    ///
+    /// With a virtual clock set, [`resolve`](BaseDocument::resolve) and fling
+    /// scrolling are deterministic: identical input reproduces identical frames.
+    /// This is the property headless scenarios and tests need (see the
+    /// `BLISS-HEADLESS-1` ticket).
+    pub fn set_clock_ms(&mut self, ms: Option<f64>) {
+        self.clock_ms = ms;
+    }
+
+    /// The current animation/input time in milliseconds: the virtual clock when
+    /// set via [`BaseDocument::set_clock_ms`], otherwise the system clock.
+    pub fn now_ms(&self) -> f64 {
+        match self.clock_ms {
+            Some(ms) => ms,
+            None => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as f64,
+        }
+    }
+
     pub fn devtools(&self) -> &DevtoolSettings {
         &self.devtool_settings
     }
@@ -1569,6 +1610,7 @@ impl BaseDocument {
             | self.has_active_animations
             | self.subdoc_is_animating
             | (self.scroll_animation != ScrollAnimationState::None)
+            | self.programmatic_animating()
     }
 
     /// Update the device and reset the stylist to process the new size
@@ -1782,6 +1824,50 @@ impl BaseDocument {
             self.scroll_node_by_has_changed(anchor_node_id, scroll_x, scroll_y, dispatch_event)
         } else {
             self.scroll_viewport_by_has_changed(scroll_x, scroll_y)
+        }
+    }
+
+    /// Declare scroll-snap offsets for a scroll container (`node`), per axis, in
+    /// scroll-offset space. When a pan/fling on `node` settles, its offset snaps
+    /// to the nearest point on each axis. See `BLISS-SCROLL-1`.
+    pub fn set_scroll_snap(&mut self, node: usize, points: SnapPoints) {
+        self.scroll_snap.insert(node, points);
+    }
+
+    /// Remove a container's scroll-snap offsets.
+    pub fn clear_scroll_snap(&mut self, node: usize) {
+        self.scroll_snap.remove(&node);
+    }
+
+    /// The offset `node` would snap to (per axis), or `None` when it declares no
+    /// snap points. Read-only; [`snap_scroll_node`](BaseDocument::snap_scroll_node)
+    /// applies it.
+    pub fn scroll_snap_target(&self, node: usize) -> Option<(f64, f64)> {
+        let points = self.scroll_snap.get(&node)?;
+        let current = self.nodes.get(node)?;
+        let x =
+            nearest_snap(current.scroll_offset.x, &points.x).unwrap_or(current.scroll_offset.x);
+        let y =
+            nearest_snap(current.scroll_offset.y, &points.y).unwrap_or(current.scroll_offset.y);
+        Some((x, y))
+    }
+
+    /// Snap a settled scroll container to its nearest declared offsets.
+    pub(crate) fn snap_scroll_node(&mut self, node: usize) {
+        let (cur_x, cur_y) = match self.nodes.get(node) {
+            Some(n) => (n.scroll_offset.x, n.scroll_offset.y),
+            None => return,
+        };
+        let Some((target_x, target_y)) = self.scroll_snap_target(node) else {
+            return;
+        };
+        // `scroll_by` subtracts its delta, so to land on the target offset we
+        // pass the negated difference.
+        let dx = cur_x - target_x;
+        let dy = cur_y - target_y;
+        if dx != 0.0 || dy != 0.0 {
+            self.scroll_by(Some(node), dx, dy, &mut |_| {});
+            self.shell_provider.request_redraw();
         }
     }
 

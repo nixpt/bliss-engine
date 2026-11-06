@@ -1,9 +1,6 @@
 //! Resolve style and layout
 
-use std::{
-    cell::RefCell,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::cell::RefCell;
 
 use debug_timer::debug_timer;
 use parley::LayoutContext;
@@ -135,13 +132,10 @@ impl BaseDocument {
     }
 
     pub fn resolve_scroll_animation(&mut self) {
+        let time_ms = self.now_ms();
+        let mut settle_target = None;
         match &mut self.scroll_animation {
             ScrollAnimationState::Fling(fling_state) => {
-                let time_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64 as f64;
-
                 let time_diff_ms = time_ms - fling_state.last_seen_time;
 
                 // 0.95 @ 60fps normalized to actual frame times
@@ -150,19 +144,27 @@ impl BaseDocument {
                 fling_state.x_velocity *= deceleration;
                 fling_state.y_velocity *= deceleration;
                 fling_state.last_seen_time = time_ms;
-                let fling_state = fling_state.clone();
+                let target = fling_state.target;
+                let x_velocity = fling_state.x_velocity;
+                let y_velocity = fling_state.y_velocity;
 
-                let dx = fling_state.x_velocity * time_diff_ms;
-                let dy = fling_state.y_velocity * time_diff_ms;
+                let dx = x_velocity * time_diff_ms;
+                let dy = y_velocity * time_diff_ms;
 
-                self.scroll_by(Some(fling_state.target), dx, dy, &mut |_| {});
-                if fling_state.x_velocity.abs() < 0.1 && fling_state.y_velocity.abs() < 0.1 {
+                self.scroll_by(Some(target), dx, dy, &mut |_| {});
+                if x_velocity.abs() < 0.1 && y_velocity.abs() < 0.1 {
                     self.scroll_animation = ScrollAnimationState::None;
+                    settle_target = Some(target);
                 }
             }
             ScrollAnimationState::None => {
                 // Do nothing
             }
+        }
+
+        // A settled pan/fling snaps the container to its declared offsets.
+        if let Some(target) = settle_target {
+            self.snap_scroll_node(target);
         }
     }
 

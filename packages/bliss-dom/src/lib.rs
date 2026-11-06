@@ -32,6 +32,7 @@ const NON_INCREMENTAL: bool = !INCREMENTAL;
 ///
 /// `BaseDocument` manages the node tree, style system, layout state, event handlers,
 /// and all cross-cutting concerns. Most of the high-level APIs live as methods on this struct.
+mod animate;
 mod document;
 
 /// DOM node types: [`Node`], [`NodeData`], [`ElementData`], [`Attribute`], [`TextNodeData`].
@@ -45,10 +46,12 @@ pub mod node;
 /// Controls viewport, base URL, user-agent stylesheets, font context, and provider
 /// implementations for networking, navigation, shell, and HTML parsing.
 mod config;
-/// Debug and inspection utilities: `print_taffy_tree`, `debug_log_node`.
+/// Debug and inspection utilities: `print_taffy_tree`, `debug_log_node`,
+/// `document_tree_json`.
 ///
 /// Methods on [`BaseDocument`] for dumping layout trees, inline content,
-/// and node metadata to stdout for debugging purposes.
+/// and node metadata to stdout for debugging, and `document_tree_json` for a
+/// machine-readable JSON dump of the resolved tree (agent tooling).
 mod debug;
 /// Policy-based DOM controller: [`PolicyDomController`].
 ///
@@ -81,6 +84,7 @@ mod form;
 /// Allows pluggable parsing of `innerHTML` into the DOM tree.
 /// The `DummyHtmlParserProvider` is a no-op placeholder; real parsing
 /// comes from [bliss-html](https://docs.rs/bliss-html).
+mod hot;
 mod html;
 /// Layout tree construction, computation, and damage tracking.
 ///
@@ -99,6 +103,7 @@ mod layout;
 /// Provides safe, ergonomic methods for creating, inserting, moving, and removing nodes,
 /// setting attributes, managing inline styles, and handling form control state.
 /// Acquired via [`BaseDocument::mutate()`].
+mod mutation;
 mod mutator;
 /// CSS selector matching: `querySelector` / `querySelectorAll`.
 ///
@@ -123,6 +128,7 @@ mod script;
 /// Tracks anchor/focus endpoints across inline roots, including anonymous blocks
 /// whose IDs may change across layout reconstructions. Used by event handling
 /// to implement click-to-select and drag-to-extend.
+mod scroll;
 mod selection;
 /// Integration with Servo's style engine (stylo).
 ///
@@ -168,6 +174,11 @@ pub mod net;
 /// Exports [`Point`] and other geometry primitives used across the bliss crate family.
 pub mod util;
 
+/// Loopback control surface for agents (dev-only; `control` feature). See
+/// `BLISS-AINATIVE-1`.
+#[cfg(feature = "control")]
+pub mod control;
+
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
@@ -179,6 +190,8 @@ pub use markup5ever::{
     namespace_prefix, namespace_url, ns,
 };
 pub use mutator::DocumentMutator;
+pub use mutation::Mutation;
+pub use scroll::{SnapPoints, nearest_snap};
 pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
 pub use script::{

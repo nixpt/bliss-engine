@@ -1,8 +1,10 @@
 use crate::Document;
 use bliss_traits::events::{
-    BlissPointerEvent, BlissPointerId, DomEvent, DomEventData, EventPhase, EventSink, EventState,
-    UiEvent,
+    BlissKeyEvent, BlissPointerEvent, BlissPointerId, BlissWheelDelta, BlissWheelEvent, DomEvent,
+    DomEventData, EventPhase, EventSink, EventState, MouseEventButton, MouseEventButtons,
+    PointerCoords, PointerDetails, UiEvent,
 };
+use keyboard_types::Modifiers;
 use std::collections::VecDeque;
 
 pub trait EventHandler {
@@ -321,5 +323,93 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     fn run_default_action(&mut self, event: &mut DomEvent) {
         let mut doc = self.doc.inner_mut();
         doc.handle_dom_event(event, |new_evt| self.queue.push_back(new_evt));
+    }
+}
+
+// ── Synthetic input (BLISS-HEADLESS-1) ──────────────────────────────────────
+
+impl<Handler: EventHandler> EventDriver<'_, Handler> {
+    /// Synthesize a mouse-pointer move to document page coordinates `(x, y)`.
+    ///
+    /// Headless input for agent tooling and tests: the event runs through the
+    /// same handler chain, sink and default actions as a real one, so hover and
+    /// clicks behave identically.
+    pub fn synthesize_pointer_move(&mut self, x: f32, y: f32) {
+        self.handle_ui_event(UiEvent::PointerMove(synthetic_pointer(
+            x,
+            y,
+            MouseEventButton::Main,
+            MouseEventButtons::None,
+        )));
+    }
+
+    /// Synthesize a primary mouse-button press at `(x, y)`.
+    pub fn synthesize_pointer_down(&mut self, x: f32, y: f32) {
+        self.handle_ui_event(UiEvent::PointerDown(synthetic_pointer(
+            x,
+            y,
+            MouseEventButton::Main,
+            MouseEventButtons::Primary,
+        )));
+    }
+
+    /// Synthesize a primary mouse-button release at `(x, y)`.
+    pub fn synthesize_pointer_up(&mut self, x: f32, y: f32) {
+        self.handle_ui_event(UiEvent::PointerUp(synthetic_pointer(
+            x,
+            y,
+            MouseEventButton::Main,
+            MouseEventButtons::None,
+        )));
+    }
+
+    /// Synthesize a full primary click (press then release) at `(x, y)`, which
+    /// dispatches the click default action exactly as a real click does.
+    pub fn synthesize_click(&mut self, x: f32, y: f32) {
+        self.synthesize_pointer_down(x, y);
+        self.synthesize_pointer_up(x, y);
+    }
+
+    /// Synthesize a wheel/trackpad scroll of `(dx, dy)` pixels at `(x, y)`.
+    pub fn synthesize_wheel(&mut self, x: f32, y: f32, dx: f64, dy: f64) {
+        self.handle_ui_event(UiEvent::Wheel(BlissWheelEvent {
+            delta: BlissWheelDelta::Pixels(dx, dy),
+            coords: synthetic_coords(x, y),
+            buttons: MouseEventButtons::None,
+            mods: Modifiers::empty(),
+        }));
+    }
+
+    /// Synthesize a key-down event.
+    pub fn synthesize_key_down(&mut self, event: BlissKeyEvent) {
+        self.handle_ui_event(UiEvent::KeyDown(event));
+    }
+
+    /// Synthesize a key-up event.
+    pub fn synthesize_key_up(&mut self, event: BlissKeyEvent) {
+        self.handle_ui_event(UiEvent::KeyUp(event));
+    }
+}
+
+/// Page/client/screen coordinates for a synthetic event at `(x, y)` — a
+/// synthetic event has no real screen position, so all three are `(x, y)`.
+fn synthetic_coords(x: f32, y: f32) -> PointerCoords {
+    PointerCoords { page_x: x, page_y: y, screen_x: x, screen_y: y, client_x: x, client_y: y }
+}
+
+fn synthetic_pointer(
+    x: f32,
+    y: f32,
+    button: MouseEventButton,
+    buttons: MouseEventButtons,
+) -> BlissPointerEvent {
+    BlissPointerEvent {
+        id: BlissPointerId::Mouse,
+        is_primary: true,
+        coords: synthetic_coords(x, y),
+        button,
+        buttons,
+        mods: Modifiers::empty(),
+        details: PointerDetails::default(),
     }
 }

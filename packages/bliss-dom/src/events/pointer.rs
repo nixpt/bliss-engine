@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use bliss_traits::{
@@ -179,13 +179,10 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
         }
     }
 
+    let now_ms = doc.now_ms() as u64;
     if let DragMode::Panning(state) = &mut doc.drag_mode {
-        let now_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH);
-        debug_assert!(now_since_epoch.is_ok(), "SystemTime before UNIX_EPOCH");
-        let time_ms = now_since_epoch.unwrap_or_default().as_millis() as u64;
-
         let target = state.target;
-        let (dx, dy) = state.update(time_ms, event.screen_x(), event.screen_y());
+        let (dx, dy) = state.update(now_ms, event.screen_x(), event.screen_y());
 
         let has_changed = doc.scroll_by(Some(target), dx, dy, &mut dispatch_event);
         return has_changed;
@@ -429,9 +426,7 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     // the document with a touch
     let do_click = drag_mode == DragMode::None;
 
-    let now_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH);
-    debug_assert!(now_since_epoch.is_ok(), "SystemTime before UNIX_EPOCH");
-    let time_ms = now_since_epoch.unwrap_or_default().as_millis() as u64;
+    let time_ms = doc.now_ms() as u64;
 
     if let DragMode::Panning(state) = &drag_mode {
         if let Some(fling) = state.generate_fling(time_ms) {

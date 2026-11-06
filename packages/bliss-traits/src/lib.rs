@@ -4,6 +4,7 @@
 pub mod devtools;
 pub mod dom_control;
 pub mod events;
+pub mod motion;
 pub mod navigation;
 pub mod net;
 pub mod shell;
