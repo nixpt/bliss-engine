@@ -28,6 +28,8 @@ file_input = []
 incremental = []
 parallel-construct = []
 log_phase_times = ["debug_timer/enable"]
+# BLISS-AINATIVE-1: loopback control surface for agents (dev-only; never default).
+control = []
 
 [dependencies]
 # Bliss dependencies

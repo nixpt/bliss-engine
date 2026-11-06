@@ -173,6 +173,11 @@ pub mod net;
 /// Exports [`Point`] and other geometry primitives used across the bliss crate family.
 pub mod util;
 
+/// Loopback control surface for agents (dev-only; `control` feature). See
+/// `BLISS-AINATIVE-1`.
+#[cfg(feature = "control")]
+pub mod control;
+
 #[cfg(feature = "accessibility")]
 mod accessibility;
 

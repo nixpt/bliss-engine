@@ -40,9 +40,23 @@ Everything needed already exists as primitives; the gap is a channel and a few c
 
 ## Done when
 
-- [ ] The dev-only control channel round-trips: apply a mutation list → resolve → dump.
-- [ ] A stylesheet/CSS hot-reload path.
-- [ ] Documented authorization + sandbox story; never enabled by default.
+- [x] The dev-only control channel round-trips: apply a mutation list → resolve → dump —
+      `bliss_dom::control` (feature `control`): a loopback TCP server over `BaseDocument`
+      (`serve` / `serve_connection`), a **one-command-per-line** protocol (`dump`, `resolve`,
+      `set_attr`, `set_style`, `set_text`, `remove`), token auth. Tested: parse+execute, a real
+      TCP round-trip, and a rejected token.
+- [ ] Embed the channel behind a **running window**. A `BaseDocument` is not `Send`, so the
+      windowed host (bliss-shell) must run the server on a thread and marshal each command to the
+      UI thread (the winit proxy / `BlissShellEvent`), returning the response to the socket.
+- [ ] A stylesheet / CSS **hot-reload** path (re-inject via the stylesheet API and re-resolve).
+- [x] Never enabled by default: the `control` feature is off; the server binds `127.0.0.1` and
+      requires a token. *(Routing untrusted content through `PolicyDomController` is still to do.)*
+
+## Note
+
+- The protocol is line-oriented rather than JSON (dependency-free, trivially parseable); a JSON
+  layer can wrap it later. The tree response *is* JSON (`document_tree_json`), so agents get a
+  structured read-back today.
 
 ## Note
 
