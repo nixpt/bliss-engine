@@ -101,6 +101,7 @@ mod layout;
 /// Provides safe, ergonomic methods for creating, inserting, moving, and removing nodes,
 /// setting attributes, managing inline styles, and handling form control state.
 /// Acquired via [`BaseDocument::mutate()`].
+mod mutation;
 mod mutator;
 /// CSS selector matching: `querySelector` / `querySelectorAll`.
 ///
@@ -181,6 +182,7 @@ pub use markup5ever::{
     namespace_prefix, namespace_url, ns,
 };
 pub use mutator::DocumentMutator;
+pub use mutation::Mutation;
 pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
 pub use script::{
