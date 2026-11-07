@@ -45,6 +45,7 @@ use style::Atom;
 use style::animation::DocumentAnimationSet;
 use style::attr::{AttrIdentifier, AttrValue};
 use style::data::{ElementData as StyloElementData, ElementStyles};
+use style::invalidation::element::restyle_hints::RestyleHint;
 use style::media_queries::MediaType;
 use style::properties::ComputedValues;
 use style::properties::style_structs::Font;
@@ -717,6 +718,11 @@ impl BaseDocument {
             return;
         };
         el.set_style_property(name, value, &self.guard, self.url.url_extra_data());
+        // The declaration block only changes what the next cascade reads; without
+        // a hint the style traversal skips this element. Only this element's own
+        // inline style changed, so RESTYLE_SELF is enough: stylo still cascades
+        // inherited changes to the children.
+        node.set_restyle_hint(RestyleHint::RESTYLE_SELF);
     }
 
     pub fn remove_style_property(&mut self, node_id: usize, name: &str) {
@@ -727,6 +733,7 @@ impl BaseDocument {
             return;
         };
         el.remove_style_property(name, &self.guard, self.url.url_extra_data());
+        node.set_restyle_hint(RestyleHint::RESTYLE_SELF);
     }
 
     pub fn set_sub_document(&mut self, node_id: usize, sub_document: Box<dyn Document>) {
