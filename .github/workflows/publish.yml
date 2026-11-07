@@ -61,6 +61,8 @@ jobs:
 
       - name: tag must match every crate's version
         id: ver
+        env:
+          VERIFY_AUTH: ${{ inputs.verify_auth }}
         run: |
           meta="$(cargo metadata --no-deps --format-version 1)"
           ver="$(echo "$meta" | jq -r '.packages[] | select(.name=="arniko-bliss") | .version')"
@@ -80,7 +82,12 @@ jobs:
                 exit 1
               fi ;;
             *)
-              echo "manual run on $GITHUB_REF_NAME — publishing version $ver" ;;
+              # Only a tag publishes. A verify run is the one thing allowed off a tag.
+              if [ "$VERIFY_AUTH" != "true" ]; then
+                echo "::error::refusing to publish from $GITHUB_REF_NAME: run this on a vX.Y.Z tag"
+                exit 1
+              fi
+              echo "verify run on $GITHUB_REF_NAME — nothing will be published" ;;
           esac
 
       - name: which crates still need publishing
@@ -124,7 +131,7 @@ jobs:
           fi
 
       - name: cargo publish (dependency order)
-        if: steps.todo.outputs.crates != ''
+        if: steps.todo.outputs.crates != '' && inputs.verify_auth != true
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
           TODO: ${{ steps.todo.outputs.crates }}

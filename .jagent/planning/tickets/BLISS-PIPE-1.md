@@ -1,6 +1,6 @@
 # BLISS-PIPE-1 — the release pipeline ships what CI no longer checks
 
-**Status:** In review
+**Status:** Released in 0.3.2 (arniko lockfile move still open)
 **Filed:** 2026-10-31, from a crates.io audit of the bliss/arniko crates
 
 ## Problem
@@ -28,5 +28,6 @@
 - [x] `exoshell` (feature + module) removed from `bliss-shell`.
 - [x] `arniko-bliss` → `documentation = "https://docs.rs/arniko-bliss"`.
 - [x] Workspace version 0.3.2.
-- [ ] CI green on the PR.
-- [ ] Released: tag `v0.3.2` (publish.yml), then arniko moves to the 0.3.2 crates.
+- [x] CI green on the PR.
+- [x] Released: tag `v0.3.2` (publish.yml).
+- [ ] arniko moves to the released crates (its lockfile is still on 0.3.1).

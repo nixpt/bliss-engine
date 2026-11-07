@@ -1,6 +1,6 @@
 # BLISS-STYLE-1 — `set_style_property` does not restyle an already-styled element
 
-**Status:** In review
+**Status:** Done (merged in #19, ships in 0.3.3)
 **Filed:** 2026-11-06, from the reviews of bliss-engine #18 and arniko #29
 
 ## Problem
