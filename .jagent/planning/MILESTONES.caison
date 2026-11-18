@@ -1,0 +1,75 @@
+@caison { version: "1.0" }
+
+schema: "milestones/1"
+
+project: {
+  name: "bliss-engine"
+  kind: "repo"
+  lifecycle: "shipped" @verified { at: "2026-11-18", by: "altair" }
+  lifecycle_since: "2026-09-27"
+  home: "zorro"
+  ticket_prefix: "BLISS"
+  summary: "the bliss DOM/style/layout engine (a Blitz fork, upstream ties cut 2026-10-12); bliss-dom and arniko-bliss 0.3.3 on crates.io via a tag-only publish pipeline; CI green; Rune engine-borrow work (headless, motion, scroll) open in #18"
+  north_star: "a small, agent-inspectable HTML/CSS engine that arniko builds native UIs on"
+  stewards: ["altair"]
+  lineage: [
+    { rel: "carved_from", from: "arniko", note: "bliss crates brought home from arniko in PR #7 (2026-09-27)" },
+  ]
+  evidence: {
+    default_branch: "main"
+    registries: [{ registry: "crates.io", name: "bliss-dom" }, { registry: "crates.io", name: "arniko-bliss" }]
+  }
+}
+
+milestones: [
+  {
+    id: "B1"
+    title: "publish-ready fork on crates.io (0.3.x)"
+    status: "done" @verified { at: "2026-11-18", by: "altair" }
+    done_at: "2026-09-27"
+    version: "v0.3.0"
+    done_when: [
+      { claim: "bliss crates brought home and publish-ready (PR #7)", check: { kind: "merged", pr: "7" } },
+      { claim: "v0.3.0 tagged", check: { kind: "tag", pattern: "v0.3.0" } },
+      { claim: "bliss-dom on crates.io", check: { kind: "published", registry: "crates.io", name: "bliss-dom" } },
+    ]
+  },
+  {
+    id: "B2"
+    title: "independent of upstream Blitz"
+    status: "done" @verified { at: "2026-11-18", by: "altair" }
+    done_at: "2026-10-12"
+    done_when: [{ claim: "remaining upstream ties cut (PR #11)", check: { kind: "merged", pr: "11" } }]
+  },
+  {
+    id: "B3"
+    title: "a release pipeline that checks what it ships"
+    status: "done" @verified { at: "2026-11-18", by: "altair" }
+    done_at: "2026-11-07"
+    version: "v0.3.3"
+    tickets: ["BLISS-PIPE-1", "BLISS-STYLE-1"]
+    done_when: [
+      { claim: "pipeline (PR #14) and tag-only publish (PR #20)", check: { kind: "merged", pr: "20" } },
+      { claim: "v0.3.3 tagged", check: { kind: "tag", pattern: "v0.3.3" } },
+      { claim: "main CI green", check: { kind: "ci", branch: "main" } },
+    ]
+    notes: "BLISS-PIPE-1 notes the arniko lockfile move as still open"
+  },
+  {
+    id: "B4"
+    title: "Rune engine borrows: headless, motion, scroll"
+    status: "next" @verified { at: "2026-11-18", by: "altair" }
+    tickets: ["BLISS-HEADLESS-1", "BLISS-MOTION-1", "BLISS-SCROLL-1", "BLISS-AINATIVE-1", "BLISS-DEPS-1"]
+    done_when: [
+      { claim: "tickets filed and engine work merged (PR #18)", check: { kind: "merged", pr: "18" } },
+    ]
+    notes: "PR #18 is titled as planning but also carries bliss-dom code (animate, scroll, motion, hot); its tickets are not on main yet"
+  },
+  {
+    id: "B5"
+    title: "sub-documents and accessibility"
+    status: "planned" @verified { at: "2026-11-18", by: "altair" }
+    tickets: ["BLISS-SUBDOC-1", "BLISS-SUBDOC-2", "BLISS-A11Y-1"]
+    done_when: [{ claim: "all B5 tickets closed", check: { kind: "tickets", status: "Done" } }]
+  },
+]
